@@ -111,6 +111,47 @@ describe('estimateTokenCount', () => {
 
       expect(estimateTokenCount(input, asciiOptions)).toBeGreaterThan(estimateTokenCount(input))
     })
+
+    it('applies each text rule ratio', () => {
+      expect(estimateTokenCount('------------')).toBe(2)
+      expect(estimateTokenCount('------------', { punctuationCharsPerToken: 2 })).toBe(6)
+
+      expect(estimateTokenCount('123456789')).toBe(3)
+      expect(estimateTokenCount('123456789', { digitsPerToken: 9 })).toBe(1)
+
+      expect(estimateTokenCount('ABCDEFGHIJ')).toBe(2)
+      expect(estimateTokenCount('ABCDEFGHIJ', { shortTokenThreshold: 10 })).toBe(1)
+
+      expect(estimateTokenCount('abcdefghijkl')).toBe(2)
+      expect(estimateTokenCount('abcdefghijkl', { lowercaseWordMaxLength: 12 })).toBe(1)
+
+      expect(estimateTokenCount('人工智能技术')).toBe(6)
+      expect(estimateTokenCount('人工智能技术', { hanziCharsPerToken: 3 })).toBe(2)
+
+      expect(estimateTokenCount('こんにちは')).toBe(4)
+      expect(estimateTokenCount('こんにちは', { kanaCharsPerToken: 5 })).toBe(1)
+
+      expect(estimateTokenCount('안녕하세요')).toBe(4)
+      expect(estimateTokenCount('안녕하세요', { hangulCharsPerToken: 5 })).toBe(1)
+    })
+
+    it('overrides the ratio of a built-in language config by name', () => {
+      expect(estimateTokenCount('Größenordnung')).toBe(5)
+      expect(estimateTokenCount('Größenordnung', { languageCharsPerToken: { german: 13 } })).toBe(1)
+      expect(estimateTokenCount('Größenordnung', { languageCharsPerToken: { cyrillic: 1 } })).toBe(5)
+    })
+
+    it('ignores language ratio overrides when custom language configs are set', () => {
+      const input = 'Größenordnung'
+      expect(estimateTokenCount(input, { languageConfigs: [], languageCharsPerToken: { german: 13 } }))
+        .toBe(estimateTokenCount(input, { languageConfigs: [] }))
+    })
+
+    it('treats undefined options as the defaults', () => {
+      const input = 'Die Größenordnung of 12345 tokens – 人工智能.'
+      expect(estimateTokenCount(input, { defaultCharsPerToken: undefined, languageConfigs: undefined }))
+        .toBe(estimateTokenCount(input))
+    })
   })
 })
 

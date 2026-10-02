@@ -1,8 +1,13 @@
 import type { SegmentEstimate } from './segments.ts'
 import type { SplitByTokensOptions, TokenEstimationOptions } from './types.ts'
-import { walkSegments } from './segments.ts'
+import { countTextTokens, resolveTokenEstimationOptions, walkSegments } from './segments.ts'
 
+export { DEFAULT_PROFILE, resolveProfile } from './profile.ts'
+export type { ModelProfile, ProfileField, ResolvedModelProfile } from './profile.ts'
 export * from './types.ts'
+export { createUsageEstimator, estimateUsage } from './usage/estimator.ts'
+export type { UsageEstimator } from './usage/estimator.ts'
+export type * from './usage/types.ts'
 
 export function isWithinTokenLimit(
   text: string,
@@ -17,12 +22,7 @@ export function estimateTokenCount(text?: string, options: TokenEstimationOption
   if (!text)
     return 0
 
-  let tokenCount = 0
-  for (const segmentEstimate of walkSegments(text, options)) {
-    tokenCount += segmentEstimate.tokenCount
-  }
-
-  return tokenCount
+  return countTextTokens(text, resolveTokenEstimationOptions(options))
 }
 
 /** Extracts a portion of text based on token positions, similar to `Array.prototype.slice()`. */
@@ -37,7 +37,7 @@ export function sliceByTokens(
 
   // Negative indices resolve against the total count, which is only known
   // after a full walk – buffer it instead of walking twice.
-  let segmentEstimates: Iterable<SegmentEstimate> = walkSegments(text, options)
+  let segmentEstimates: Iterable<SegmentEstimate> = walkSegments(text, resolveTokenEstimationOptions(options))
   let totalTokens = 0
   if (start < 0 || (end !== undefined && end < 0)) {
     const bufferedEstimates = Array.from(segmentEstimates)
@@ -92,7 +92,7 @@ export function splitByTokens(
   // duplicate the end of the previous chunk.
   let hasUnchunkedSegments = false
 
-  for (const segmentEstimate of walkSegments(text, options)) {
+  for (const segmentEstimate of walkSegments(text, resolveTokenEstimationOptions(options))) {
     currentChunk.push(segmentEstimate)
     currentTokenCount += segmentEstimate.tokenCount
     hasUnchunkedSegments = true

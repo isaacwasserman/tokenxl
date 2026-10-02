@@ -3,7 +3,7 @@
   "type": "module",
   "version": "2.1.0",
   "packageManager": "pnpm@11.20.0",
-  "description": "Fast token estimation with 95%+ average accuracy in a 2kB bundle",
+  "description": "Fast token estimation for text, AI SDK messages and tool schemas",
   "author": "Johann Schopplich <hello@johannschopplich.com>",
   "license": "MIT",
   "homepage": "https://github.com/johannschopplich/tokenx#readme",
@@ -49,11 +49,22 @@
     "lint:fix": "eslint . --fix",
     "test": "vitest",
     "test:types": "tsc --noEmit",
-    "release": "bumpp"
+    "release": "bumpp",
+    "bench:speed": "vitest bench --run bench/"
+  },
+  "peerDependencies": {
+    "ai": "^5.0.0 || ^6.0.0 || ^7.0.0"
+  },
+  "peerDependenciesMeta": {
+    "ai": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@antfu/eslint-config": "^9.2.0",
     "@types/node": "^26.1.2",
+    "ai": "^7.0.126",
+    "ai-tokenizer": "^1.0.7",
     "ansis": "^4.3.1",
     "automd": "^0.4.3",
     "bumpp": "^12.1.1",
@@ -63,6 +74,7 @@
     "tsdown": "^0.22.14",
     "typescript": "^6.0.3",
     "utilful": "^3.3.0",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "zod": "^4.6.5"
   }
 }

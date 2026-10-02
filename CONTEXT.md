@@ -46,3 +46,13 @@ _Avoid_: maximum, limit
 
 **Overlap**:
 The trailing tokens of a chunk repeated at the start of the next chunk to preserve context across boundaries. Always smaller than the target chunk size, and never a chunk on its own.
+
+
+**Model profile**:
+JSON-safe text ratios and structural overhead weights for one model. Missing fields use `DEFAULT_PROFILE`; overhead values may be negative.
+
+**Feature tally**:
+The unweighted counts of request features and estimated text tokens produced by the usage walker. Its dot product with profile weights gives the unrounded estimate.
+
+**Breakdown**:
+An optional account of token costs by message, part, tool, and schema property. Component costs retain fractions; only the request total is rounded. Child properties are included in their parent's nested cost.
