@@ -1,70 +1,12 @@
-import type { ModelMessage, SystemModelMessage, ToolSet } from "ai";
 import type { GroundTruthCounter } from "../tune/types.ts";
-import { resolveJsonSchema } from "../usage/schema.ts";
 import type { UsageInput } from "../usage/types.ts";
+import {
+  generate,
+  hasLeadingSystemOnly,
+  hasUnansweredToolCall,
+  loadOptional,
+} from "./ai-sdk.ts";
 import type { ProviderAdapter, ProviderAdapterOptions } from "./types.ts";
-import { MAX_OUTPUT_TOKENS } from "./types.ts";
-
-// Optional peer dependencies, loaded only when this adapter is used.
-async function loadSdk(): Promise<{
-  ai: typeof import("ai");
-  openrouter: typeof import("@openrouter/ai-sdk-provider");
-}> {
-  try {
-    const [ai, openrouter] = await Promise.all([
-      import("ai"),
-      import("@openrouter/ai-sdk-provider"),
-    ]);
-    return { ai, openrouter };
-  } catch (error) {
-    throw new Error(
-      "tokenx: The OpenRouter adapter needs the ai and @openrouter/ai-sdk-provider packages.",
-      { cause: error },
-    );
-  }
-}
-
-function toTools(
-  ai: typeof import("ai"),
-  tools: UsageInput["tools"],
-): ToolSet | undefined {
-  if (!tools || !Object.keys(tools).length) return;
-  return Object.fromEntries(
-    Object.entries(tools).map(([name, tool]) => {
-      const schema = resolveJsonSchema(tool.inputSchema);
-      if (!schema)
-        throw new TypeError(`Cannot resolve the schema for ${name}.`);
-      return [
-        name,
-        ai.tool({
-          ...(typeof tool.description === "string"
-            ? { description: tool.description }
-            : {}),
-          inputSchema: ai.jsonSchema(schema),
-        }),
-      ];
-    }),
-  );
-}
-
-/**
- * The AI SDK takes system content as `instructions`, separate from `messages`.
- * Leading system messages move there, each as its own system message, in order.
- */
-function toPrompt(input: UsageInput): {
-  instructions?: SystemModelMessage[];
-  messages: ModelMessage[];
-} {
-  const start = input.messages.findIndex(
-    (message) => message.role !== "system",
-  );
-  const split = start < 0 ? input.messages.length : start;
-  const instructions = input.messages.slice(0, split) as SystemModelMessage[];
-  return {
-    ...(instructions.length ? { instructions } : {}),
-    messages: input.messages.slice(split) as ModelMessage[],
-  };
-}
 
 interface ModelCapabilities {
   inputModalities: Set<string>;
@@ -106,7 +48,7 @@ export function supportsOpenRouterInput(
   input: UsageInput,
   capabilities: ModelCapabilities,
 ): boolean {
-  if (toPrompt(input).messages.some((message) => message.role === "system"))
+  if (!hasLeadingSystemOnly(input) || hasUnansweredToolCall(input))
     return false;
   const parts = input.messages.flatMap((message) =>
     Array.isArray(message.content)
@@ -117,17 +59,6 @@ export function supportsOpenRouterInput(
         }[])
       : [],
   );
-  const results = new Set(
-    parts.flatMap((part) =>
-      part.type === "tool-result" ? [part.toolCallId] : [],
-    ),
-  );
-  if (
-    parts.some(
-      (part) => part.type === "tool-call" && !results.has(part.toolCallId),
-    )
-  )
-    return false;
   if (
     !capabilities.tools &&
     (Object.keys(input.tools ?? {}).length ||
@@ -160,44 +91,39 @@ export function createOpenRouterCounter(
   ];
   let first = 0;
   return async (input) => {
-    const { ai, openrouter } = await loadSdk();
-    const model = openrouter
-      .createOpenRouter({ apiKey: options.apiKey })
-      .chat(options.modelId);
+    const [{ APICallError }, model] = await Promise.all([
+      loadOptional("ai", () => import("ai")),
+      createModel(options),
+    ]);
     let lastError: unknown;
     for (let index = first; index < attempts.length; index++) {
       const { maxOutputTokens, reasoning } = attempts[index]!;
       try {
-        const result = await ai.generateText({
-          model,
-          ...toPrompt(input),
-          tools: toTools(ai, input.tools),
+        const { usage } = await generate(model, input, {
           maxOutputTokens,
-          // Rate limits and transient failures are retried with backoff; rejected settings are not.
-          maxRetries: 8,
           ...(reasoning
             ? { providerOptions: { openrouter: { reasoning } } }
             : {}),
         });
-        if (result.usage.inputTokens === undefined)
-          throw new TypeError("OpenRouter did not report prompt tokens.");
         // Later requests start from the settings this model accepted.
         first = index;
-        return {
-          count: result.usage.inputTokens,
-          usage: {
-            inputTokens: result.usage.inputTokens,
-            outputTokens: result.usage.outputTokens ?? 0,
-          },
-        };
+        return { count: usage!.inputTokens, usage: usage! };
       } catch (error) {
-        if (!ai.APICallError.isInstance(error) || error.statusCode !== 400)
+        if (!APICallError.isInstance(error) || error.statusCode !== 400)
           throw error;
         lastError = error;
       }
     }
     throw lastError;
   };
+}
+
+async function createModel(options: ProviderAdapterOptions) {
+  const { createOpenRouter } = await loadOptional(
+    "@openrouter/ai-sdk-provider",
+    () => import("@openrouter/ai-sdk-provider"),
+  );
+  return createOpenRouter({ apiKey: options.apiKey }).chat(options.modelId);
 }
 
 /** Counts and generates through OpenRouter's chat completions with the AI SDK provider. */
@@ -211,36 +137,16 @@ export function createOpenRouterAdapter(
     countTokens: createOpenRouterCounter(options),
     supportsInput: async (input) =>
       supportsOpenRouterInput(input, await fetchOnce()),
-    invokeModel: async (input, { signal }) => {
-      const { ai, openrouter } = await loadSdk();
-      const result = await ai.generateText({
-        model: openrouter
-          .createOpenRouter({ apiKey: options.apiKey })
-          .chat(options.modelId),
-        ...toPrompt(input),
-        tools: toTools(ai, input.tools),
-        maxOutputTokens: MAX_OUTPUT_TOKENS,
-        maxRetries: 8,
-        ...(signal ? { abortSignal: signal } : {}),
+    invokeModel: async (input, { signal }) =>
+      generate(await createModel(options), input, {
+        ...(signal ? { signal } : {}),
         ...(options.reasoningLevel
           ? {
               providerOptions: {
-                openrouter: {
-                  reasoning: { effort: options.reasoningLevel },
-                },
+                openrouter: { reasoning: { effort: options.reasoningLevel } },
               },
             }
           : {}),
-      });
-      // An incomplete response ends the conversation; it was still generated and billed.
-      return {
-        messages:
-          result.finishReason === "length" ? null : result.response.messages,
-        usage: {
-          inputTokens: result.usage.inputTokens ?? 0,
-          outputTokens: result.usage.outputTokens ?? 0,
-        },
-      };
-    },
+      }),
   };
 }

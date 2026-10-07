@@ -233,7 +233,7 @@ export function createProbes(options: ProbeOptions = {}): Probes {
     add(second, requiredOne);
     add(requiredOne, withRequired(["q", "limit"]));
     for (const part of [
-      { type: "image" as const, image: PROBE_IMAGE },
+      { type: "file" as const, data: PROBE_IMAGE, mediaType: "image/png" },
       { type: "file" as const, data: PROBE_FILE, mediaType: "application/pdf" },
     ]) {
       add(control, {

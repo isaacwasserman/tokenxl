@@ -61,10 +61,18 @@
     "release": "bumpp"
   },
   "peerDependencies": {
+    "@ai-sdk/anthropic": "^4.0.0",
+    "@ai-sdk/openai": "^4.0.0",
     "@openrouter/ai-sdk-provider": "^3.1.0",
     "ai": "^5.0.0 || ^6.0.0 || ^7.0.0"
   },
   "peerDependenciesMeta": {
+    "@ai-sdk/anthropic": {
+      "optional": true
+    },
+    "@ai-sdk/openai": {
+      "optional": true
+    },
     "@openrouter/ai-sdk-provider": {
       "optional": true
     },
@@ -73,6 +81,8 @@
     }
   },
   "devDependencies": {
+    "@ai-sdk/anthropic": "^4.0.73",
+    "@ai-sdk/openai": "^4.0.85",
     "@biomejs/biome": "2.5.15",
     "@openrouter/ai-sdk-provider": "^3.1.0",
     "@types/node": "^26.1.2",
