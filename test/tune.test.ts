@@ -1,26 +1,20 @@
 import { jsonSchema } from "ai";
 import { describe, expect, it, vi } from "vitest";
-import type { UsageInput } from "../src/index.ts";
+import type { TextProfile, UsageInput } from "../src/index.ts";
 import {
   createUsageEstimator,
   DEFAULT_TEXT_PROFILE,
   resolveProfile,
 } from "../src/index.ts";
-import { compileProfile, FEATURE_FIELDS } from "../src/profile.ts";
-import { tuneProfile } from "../src/tune/calibrate.ts";
-import { listCandidateValues } from "../src/tune/candidates.ts";
-import { collectSamples } from "../src/tune/collect.ts";
 import type { TuningCorpus } from "../src/tune/corpus.ts";
-import { fitTextRules } from "../src/tune/fit.ts";
-import type { TuneProgress } from "../src/tune/index.ts";
+import type {
+  TuneOptions,
+  TuneProgress,
+  TuneResult,
+} from "../src/tune/index.ts";
+import { tuneProfile } from "../src/tune/index.ts";
 import { createProbes } from "../src/tune/probes.ts";
-import {
-  buildHistogram,
-  getTextValue,
-  resolveTextRules,
-} from "../src/tune/text.ts";
-import type { TuneOptions, TuneResult } from "../src/tune/types.ts";
-import { tallyUsage } from "../src/usage/estimator.ts";
+import { STRUCTURAL_FIELDS } from "./fixtures/profile-fields.ts";
 
 // Tests replace the built-in corpus with small designs and call the real tuneProfile.
 const corpus = vi.hoisted(() => ({ current: undefined as unknown }));
@@ -29,6 +23,8 @@ vi.mock("../src/tune/corpus.ts", () => ({
     return corpus.current;
   },
 }));
+
+const textRules = (text?: TextProfile) => resolveProfile({ text }).text;
 
 /** Tunes with the given inputs in place of the built-in corpus. */
 function tune(
@@ -78,7 +74,7 @@ describe("tuneProfile", () => {
       0,
     );
     expect(result.profile.contentMultiplier).toBeCloseTo(2, 10);
-    for (const field of FEATURE_FIELDS)
+    for (const field of STRUCTURAL_FIELDS)
       expect(result.profile[field], field).toBeCloseTo(
         target.profile[field],
         8,
@@ -107,19 +103,20 @@ describe("tuneProfile", () => {
         ),
       },
     ]) {
-      const initial = resolveProfile({
-        baseOverhead: 0,
-        perMessage: 0,
+      const target = createUsageEstimator({
         contentMultiplier: 2,
+        text: example.text,
       });
-      const target = createUsageEstimator({ ...initial, text: example.text });
       const inputs: UsageInput[] = example.inputs.map((content) => ({
         messages: [{ role: "user", content }],
       }));
-      const data = await collectSamples(inputs, initial, {
+      const probes = createProbes();
+      probes.textRules = [];
+      const { profile: fitted } = await tune({
+        probes,
+        textSamples: inputs,
         countTokens: (input) => target.count(input),
       });
-      const fitted = fitTextRules(data.samples, initial, initial, {});
       const estimator = createUsageEstimator(fitted);
       expect(inputs.map((input) => estimator.count(input))).toEqual(
         inputs.map((input) => target.count(input)),
@@ -214,7 +211,7 @@ describe("tuneProfile", () => {
     expect(result.report.text.multiplier).toBeCloseTo(2, 10);
     expect(result.report.text.intercept).toBeCloseTo(100_007, 8);
     expect(result.report.text.rSquared).toBeCloseTo(1, 10);
-    expect(result.report.overhead.rank).toBe(FEATURE_FIELDS.length);
+    expect(result.report.overhead.rank).toBe(STRUCTURAL_FIELDS.length);
     // Reasoning costs are measured only with invokeModel.
     expect(result.report.reasoning).toBeNull();
     expect(
@@ -222,7 +219,7 @@ describe("tuneProfile", () => {
         (report) => report.field === "perReasoningPayloadChar",
       ),
     ).toBe(false);
-    for (const field of FEATURE_FIELDS) {
+    for (const field of STRUCTURAL_FIELDS) {
       expect(result.profile[field], field).toBeCloseTo(
         target.profile[field],
         7,
@@ -232,8 +229,8 @@ describe("tuneProfile", () => {
           .identifiable,
       ).toBe(true);
     }
-    expect(resolveTextRules(result.profile.text)).toEqual(
-      resolveTextRules(target.profile.text),
+    expect(textRules(result.profile.text)).toEqual(
+      textRules(target.profile.text),
     );
     expect(
       result.report.text.rules.every(
@@ -293,20 +290,16 @@ describe("tuneProfile", () => {
       perPropDesc: 5,
       text: { lowercaseWordMaxLength: 6, defaultCharsPerToken: 2.2 },
     });
-    const compiled = compileProfile(target.profile);
     const result = await tune({
       countTokens: (input) => {
-        let corrections = 0;
         // The ground truth gives this word one token although the heuristic
         // prices it at four. Correct each occurrence in every request context.
-        tallyUsage(input, compiled, {}, (text) => {
-          if (text === "records") corrections += 6;
-          return 0;
-        });
-        return target.count(input) - corrections;
+        const occurrences =
+          JSON.stringify(input).match(/\brecords\b/g)?.length ?? 0;
+        return target.count(input) - 6 * occurrences;
       },
     });
-    for (const field of FEATURE_FIELDS)
+    for (const field of STRUCTURAL_FIELDS)
       expect(result.profile[field], field).toBeCloseTo(
         target.profile[field],
         8,
@@ -419,7 +412,7 @@ describe("tuneProfile", () => {
       probes,
       countTokens: (input) => target.count(input),
     });
-    expect(result.profile.text).toEqual(resolveTextRules(initial.text));
+    expect(result.profile.text).toEqual(textRules(initial.text));
     expect(
       result.report.text.rules.every(
         (field) => !field.identifiable && field.reason === "absent",
@@ -540,7 +533,7 @@ describe("tuneProfile", () => {
         target.count(input) + (input === validation ? 500 : 0),
     });
     expect(result.profile.contentMultiplier).toBeCloseTo(2, 10);
-    for (const field of FEATURE_FIELDS)
+    for (const field of STRUCTURAL_FIELDS)
       expect(result.profile[field], field).toBeCloseTo(
         target.profile[field],
         10,
@@ -630,29 +623,88 @@ describe("tuneProfile", () => {
   });
 });
 
-describe("listCandidateValues", () => {
-  it("keeps each ratio at or above one token per UTF-8 byte", () => {
-    const histograms = [
-      "Größenordnung über äußerst",
-      "😀😃😄 👍🏽",
-      "Библиотека открывается",
-    ].map(buildHistogram);
-    const text = resolveTextRules();
-    for (const [field, minimum] of [
-      ["german", 1],
-      ["emoji", 1 / 4],
-      ["cyrillic", 1 / 2],
-      ["defaultCharsPerToken", 1],
-    ] as const)
-      expect(
-        Math.min(
-          ...listCandidateValues(
-            field,
-            histograms,
-            text,
-            getTextValue(text, field),
-          ),
-        ),
-      ).toBeGreaterThanOrEqual(minimum);
+describe("counting", () => {
+  const plainText = (input: UsageInput): string | undefined =>
+    input.messages.length === 1 && !input.tools
+      ? (input.messages[0]!.content as string)
+      : undefined;
+
+  it("counts each plain text once per run, and counts again on the next run", async () => {
+    const target = createUsageEstimator();
+    const runs: UsageInput[][] = [[], []];
+    for (const log of runs)
+      await tune({
+        countTokens: (input) => {
+          log.push(input);
+          return target.count(input);
+        },
+      });
+    const texts = runs[0]!.flatMap((input) => plainText(input) ?? []);
+    expect(new Set(texts).size).toBe(texts.length);
+    expect(runs[1]).toHaveLength(runs[0]!.length);
   });
+
+  it("limits concurrent counter calls", async () => {
+    const target = createUsageEstimator();
+    let running = 0;
+    let maximum = 0;
+    await tune({
+      concurrency: 2,
+      countTokens: async (input) => {
+        maximum = Math.max(maximum, ++running);
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        running--;
+        return target.count(input);
+      },
+    });
+    expect(maximum).toBe(2);
+  });
+
+  it("aborts before counting and while a counter call is pending", async () => {
+    const stopped = new AbortController();
+    stopped.abort(new Error("Stopped"));
+    let calls = 0;
+    await expect(
+      tune({ signal: stopped.signal, countTokens: () => ++calls }),
+    ).rejects.toThrow("Stopped");
+    expect(calls).toBe(0);
+    const controller = new AbortController();
+    let started!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const pending = tune({
+      signal: controller.signal,
+      countTokens: () => {
+        started();
+        return new Promise<number>(() => {});
+      },
+    });
+    await ready;
+    controller.abort(new Error("Stopped"));
+    await expect(pending).rejects.toThrow("Stopped");
+  });
+
+  it("stops counting after a counter failure", async () => {
+    let calls = 0;
+    await expect(
+      tune({
+        concurrency: 1,
+        countTokens: () => {
+          calls++;
+          throw new Error("Counter failed");
+        },
+      }),
+    ).rejects.toThrow("Counter failed");
+    expect(calls).toBe(1);
+  });
+
+  it.each([NaN, Infinity, -1])(
+    "rejects an invalid count (%s)",
+    async (value) => {
+      await expect(tune({ countTokens: () => value })).rejects.toThrow(
+        TypeError,
+      );
+    },
+  );
 });

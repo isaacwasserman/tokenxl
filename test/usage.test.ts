@@ -8,12 +8,11 @@ import {
   estimateTokenCount,
   estimateUsage,
 } from "../src/index";
-import { compileProfile, FEATURE_FIELDS } from "../src/profile";
-import { tallyUsage } from "../src/usage/estimator";
+import { ZERO_COSTS } from "./fixtures/profile-fields.ts";
 
 // Structural overhead is zero so the expected counts expose the text and media rules.
 const profile = {
-  ...Object.fromEntries(FEATURE_FIELDS.map((field) => [field, 0])),
+  ...ZERO_COSTS,
   perImage: 11,
   perFile: 17,
 };
@@ -502,19 +501,19 @@ describe("tool schema estimation", () => {
   });
 });
 
-it("keeps convenience estimation and the feature tally consistent across seeded requests", () => {
+it("counts the same with an estimator, estimateUsage and a breakdown across seeded requests", () => {
   let seed = 42;
   const random = (): number => {
     seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
     return seed / 2 ** 32;
   };
-  const compiled = compileProfile({
+  const profile = {
     contentMultiplier: 1.17,
     perMessage: 7.3,
     perSystem: 2,
     perTool: -1,
-  });
-  const custom = createUsageEstimator(compiled.profile);
+  };
+  const custom = createUsageEstimator(profile);
   for (let index = 0; index < 100; index++) {
     const messages: ModelMessage[] = [{ role: "system", content: "Be brief." }];
     for (let n = 0, length = Math.floor(random() * 12); n < length; n++)
@@ -531,12 +530,9 @@ it("keeps convenience estimation and the feature tally consistent across seeded 
       }),
     };
     const input = { messages, tools };
-    const tally = tallyUsage(input, compiled);
-    const expected = Math.round(
-      tally.reduce((sum, count, i) => sum + count * compiled.weights[i]!, 0),
-    );
-    expect(custom.count(input)).toBe(expected);
-    expect(estimateUsage(input, { profile: compiled.profile })).toBe(expected);
+    const expected = custom.count(input);
+    expect(estimateUsage(input, { profile })).toBe(expected);
+    expect(estimateUsage(input, { profile, cache: false })).toBe(expected);
     expect(custom.count(input, { breakdown: true }).total).toBe(expected);
   }
 });
@@ -558,4 +554,196 @@ it("passes a schema converter through estimateUsage", () => {
   );
   expect(converted).toBeGreaterThan(estimateUsage(input));
   expect(estimateUsage(input, { toJsonSchema })).toBe(converted);
+});
+
+const encrypted = {
+  type: "reasoning.encrypted",
+  data: "e".repeat(300),
+  format: "openai-responses-v1",
+};
+const signed = {
+  type: "reasoning.text",
+  text: "Plan.",
+  signature: "s".repeat(200),
+  format: "anthropic-claude-v1",
+};
+const unsigned = {
+  type: "reasoning.text",
+  text: "Plan.",
+  format: "anthropic-claude-v1",
+};
+const details = (
+  list: unknown[],
+): { openrouter: { reasoning_details: unknown[] } } => ({
+  openrouter: { reasoning_details: list },
+});
+
+it("reads OpenRouter details from the message, the first tool call, or the first reasoning part, in that order", () => {
+  // One token per payload character and nothing else, so the count is the payload length.
+  const payloadEstimator = createUsageEstimator({
+    ...ZERO_COSTS,
+    contentMultiplier: 0,
+    perReasoningPayloadChar: 1,
+    reasoningPayloadEnvelopeChars: 0,
+  });
+  const lengths = (message: ModelMessage): number =>
+    payloadEstimator.count({ messages: [message] });
+  const parts = [
+    { type: "reasoning", text: "Plan.", providerOptions: details([signed]) },
+    {
+      type: "tool-call",
+      toolCallId: "call_1",
+      toolName: "lookup",
+      input: {},
+      providerOptions: details([signed, encrypted]),
+    },
+  ];
+  expect(lengths({ role: "assistant", content: parts } as ModelMessage)).toBe(
+    500,
+  );
+  expect(
+    lengths({ role: "assistant", content: parts.slice(0, 1) } as ModelMessage),
+  ).toBe(200);
+  expect(
+    lengths({
+      role: "assistant",
+      content: parts,
+      providerOptions: details([encrypted]),
+    } as ModelMessage),
+  ).toBe(300);
+  // Unsigned Anthropic text details are dropped, as the provider does.
+  expect(
+    lengths({
+      role: "assistant",
+      content: [
+        {
+          type: "reasoning",
+          text: "Plan.",
+          providerOptions: details([unsigned, encrypted]),
+        },
+      ],
+    } as ModelMessage),
+  ).toBe(300);
+  // An open model's unsigned text detail is sent as its text.
+  expect(
+    lengths({
+      role: "assistant",
+      content: [
+        {
+          type: "reasoning",
+          text: "Open reasoning.",
+          providerOptions: details([
+            {
+              type: "reasoning.text",
+              text: "Open reasoning.",
+              format: "unknown",
+            },
+          ]),
+        },
+      ],
+    } as ModelMessage),
+  ).toBe(15);
+});
+
+it("charges OpenRouter payloads once per request with the envelope formula, without the summary text", () => {
+  const profile = {
+    baseOverhead: 0,
+    perMessage: 0,
+    perToolCall: 0,
+    perToolResult: 0,
+    perReasoning: 40,
+    perReasoningPayloadChar: 0.5,
+    reasoningPayloadEnvelopeChars: 100,
+  };
+  const message = (text: string): ModelMessage =>
+    ({
+      role: "assistant",
+      content: [
+        {
+          type: "reasoning",
+          text: "A summary.",
+          providerOptions: details([signed]),
+        },
+        { type: "text", text },
+      ],
+    }) as ModelMessage;
+  const input: UsageInput = {
+    messages: [message("First."), message("Second.")],
+  };
+  const text = estimateTokenCount("First.") + estimateTokenCount("Second.");
+  // The same detail repeated in a later message is sent once.
+  expect(createUsageEstimator(profile).count(input)).toBe(
+    text + 0.5 * (200 - 100),
+  );
+});
+
+const openaiHistory = (): UsageInput => ({
+  messages: [
+    { role: "user", content: "A question." },
+    {
+      role: "assistant",
+      content: [
+        ...["First idea.", "Second idea."].map((text) => ({
+          type: "reasoning" as const,
+          text,
+          providerOptions: {
+            openai: {
+              itemId: "rs_1",
+              reasoningEncryptedContent: "x".repeat(400),
+            },
+          },
+        })),
+        { type: "text" as const, text: "The answer." },
+      ],
+    },
+    { role: "user", content: "Continue." },
+  ],
+});
+
+it("charges each OpenAI reasoning item once by its payload, without summary text", () => {
+  const profile = {
+    baseOverhead: 0,
+    perMessage: 0,
+    perReasoning: 40,
+    perReasoningPayloadChar: 0.5,
+    reasoningPayloadEnvelopeChars: 10,
+  };
+  const answer =
+    estimateTokenCount("The answer.") +
+    estimateTokenCount("A question.") +
+    estimateTokenCount("Continue.");
+  expect(createUsageEstimator(profile).count(openaiHistory())).toBe(
+    answer - 5 + 200,
+  );
+  const breakdown = createUsageEstimator(profile).count(openaiHistory(), {
+    breakdown: true,
+  });
+  expect(breakdown.messages[1]!.parts.map((part) => part.total)).toEqual([
+    195,
+    0,
+    estimateTokenCount("The answer."),
+  ]);
+  // Stored items have no payload: one perReasoning per item, plus each summary.
+  const stored: UsageInput = {
+    messages: [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "reasoning",
+            text: "First idea.",
+            providerOptions: { openai: { itemId: "rs_2" } },
+          },
+          {
+            type: "reasoning",
+            text: "Second idea.",
+            providerOptions: { openai: { itemId: "rs_2" } },
+          },
+        ],
+      },
+    ],
+  };
+  expect(createUsageEstimator(profile).count(stored)).toBe(
+    40 + estimateTokenCount("First idea.") + estimateTokenCount("Second idea."),
+  );
 });

@@ -1,15 +1,10 @@
 import { expect, it, vi } from "vitest";
 import type { UsageInput } from "../src/index.ts";
 import { createUsageEstimator, resolveProfile } from "../src/index.ts";
-import { tuneProfile } from "../src/tune/calibrate.ts";
 import type { TuningCorpus } from "../src/tune/corpus.ts";
+import type { TuneOptions, TuneResult } from "../src/tune/index.ts";
+import { tuneProfile } from "../src/tune/index.ts";
 import { createProbes } from "../src/tune/probes.ts";
-import {
-  fitReasoning,
-  REASONING_INVOCATIONS,
-  removeReasoningPayloads,
-} from "../src/tune/reasoning.ts";
-import type { TuneOptions, TuneResult } from "../src/tune/types.ts";
 
 // Tests replace the built-in corpus with small designs and call the real tuneProfile.
 const corpus = vi.hoisted(() => ({ current: undefined as unknown }));
@@ -56,55 +51,6 @@ function signed(
   };
 }
 
-/** Reasoning in an earlier turn: a user message follows it. */
-function history(payloads: number[], answer = "An answer."): UsageInput {
-  return {
-    messages: [
-      { role: "user", content: "A question." },
-      {
-        role: "assistant",
-        content: [
-          ...payloads.map((length) => signed(length, "A visible summary.")),
-          { type: "text", text: answer },
-        ],
-      },
-      { role: "user", content: "Continue." },
-    ],
-  };
-}
-
-/** Reasoning in the current turn: the history ends with its tool result. */
-function toolLoop(payloads: number[]): UsageInput {
-  return {
-    messages: [
-      { role: "user", content: "Look it up." },
-      {
-        role: "assistant",
-        content: [
-          ...payloads.map((length) => signed(length)),
-          {
-            type: "tool-call",
-            toolCallId: "call_1",
-            toolName: "lookup",
-            input: { id: "a" },
-          },
-        ],
-      },
-      {
-        role: "tool",
-        content: [
-          {
-            type: "tool-result",
-            toolCallId: "call_1",
-            toolName: "lookup",
-            output: { type: "json", value: { found: true } },
-          },
-        ],
-      },
-    ],
-  };
-}
-
 const zero = { perReasoningPayloadChar: 0, reasoningPayloadEnvelopeChars: 0 };
 const initial = resolveProfile({
   baseOverhead: 10,
@@ -120,155 +66,114 @@ const target = createUsageEstimator({
 });
 const count = (input: UsageInput): number => target.count(input);
 
-it("fits costs from earlier-turn reasoning with text rules and structure locked", async () => {
-  const samples = [
-    history([100]),
-    history([400]),
-    history([200, 300]),
-    history([60, 80, 1000], "A longer and different answer."),
-  ];
-  const countTokens = vi.fn(count);
-  const result = await fitReasoning(samples, initial, { countTokens });
-  expect(result.reason).toBeUndefined();
-  // Without current-turn histories, only the kept case can be fitted, so it is not a measurement.
-  expect(result.histories).toEqual({ currentTurn: 0, previousTurns: 4 });
-  expect(result.profile).toEqual({
-    ...initial,
-    perReasoningPayloadChar: expect.closeTo(0.5, 10),
-    reasoningPayloadEnvelopeChars: expect.closeTo(40, 8),
-    countReasoningInPreviousTurns: true,
-  });
-  expect(result.metrics.reasoning.after.mae).toBeCloseTo(0, 10);
-  expect(result.metrics.request.after.mae).toBe(0);
-  expect(result.metrics.reasoning.before.mae).toBeGreaterThan(0);
-  // Each history is counted with and without its payload parts.
-  expect(countTokens).toHaveBeenCalledTimes(samples.length * 2);
-});
-
-it("chooses dropped earlier-turn reasoning when the counts show it costs nothing", async () => {
-  const drops = createUsageEstimator({
-    ...initial,
-    perReasoningPayloadChar: 0.5,
-    reasoningPayloadEnvelopeChars: 40,
-    countReasoningInPreviousTurns: false,
-  });
-  const samples = [
-    history([100]),
-    history([400]),
-    history([200, 300]),
-    toolLoop([100]),
-    toolLoop([600]),
-    toolLoop([200, 300]),
-  ];
-  const result = await fitReasoning(samples, initial, {
-    countTokens: (input) => drops.count(input),
-  });
-  expect(result.reason).toBeUndefined();
-  expect(result.histories).toEqual({ currentTurn: 3, previousTurns: 3 });
-  expect(result.profile).toMatchObject({
-    perReasoningPayloadChar: expect.closeTo(0.5, 10),
-    reasoningPayloadEnvelopeChars: expect.closeTo(40, 8),
-    countReasoningInPreviousTurns: false,
-  });
-  expect(result.metrics.reasoning.after.mae).toBeCloseTo(0, 10);
-});
+/** A model whose responses carry `respond`'s parts, calling a tool when one is offered and not yet answered. */
+function modelWith(
+  respond: (input: UsageInput) => UsageInput["messages"][number]["content"],
+): (input: UsageInput) => UsageInput["messages"] {
+  return (input) => {
+    const content = respond(input) as Exclude<
+      UsageInput["messages"][number]["content"],
+      string
+    >;
+    const last = input.messages.at(-1)!;
+    if (input.tools && last.role !== "tool")
+      return [
+        {
+          role: "assistant",
+          content: [
+            ...content,
+            {
+              type: "tool-call",
+              toolCallId: "call_1",
+              toolName: Object.keys(input.tools)[0]!,
+              input: { id: "a" },
+            },
+          ],
+        } as never,
+      ];
+    return [{ role: "assistant", content } as never];
+  };
+}
 
 it("subtracts the locked cost of messages that contain only payload reasoning", async () => {
-  const onlyThinking = (length: number): UsageInput => ({
-    messages: [
-      { role: "user", content: "A question." },
-      { role: "assistant", content: [signed(length)] },
-      { role: "user", content: "Continue." },
-    ],
+  const length = (input: UsageInput): number =>
+    100 + 2 * (JSON.stringify(input).length % 211);
+  // Text answers hold only their reasoning, so removing it empties the message.
+  const result = await tune({
+    countTokens: count,
+    invokeModel: modelWith((input) => [signed(length(input))]),
   });
-  expect(removeReasoningPayloads(onlyThinking(10)).messages).toHaveLength(2);
-  const result = await fitReasoning(
-    [onlyThinking(100), onlyThinking(300), history([200, 400])],
-    initial,
-    { countTokens: count },
-  );
-  expect(result.profile.reasoningPayloadEnvelopeChars).toBeCloseTo(40, 8);
-  expect(result.profile.perReasoningPayloadChar).toBeCloseTo(0.5, 10);
+  expect(result.profile.perReasoningPayloadChar).toBeCloseTo(0.5, 4);
+  expect(result.profile.reasoningPayloadEnvelopeChars).toBeCloseTo(40, 3);
 });
 
-it("returns histories without payload reasoning unchanged and counts them once", async () => {
-  const plain: UsageInput = {
-    messages: [
-      { role: "user", content: "Plain." },
-      {
-        role: "assistant",
-        content: [
-          { type: "reasoning", text: "Visible." },
-          { type: "text", text: "Done." },
-        ],
-      },
-      { role: "user", content: "Next." },
-    ],
-  };
-  expect(removeReasoningPayloads(plain)).toBe(plain);
-  const countTokens = vi.fn(count);
-  const result = await fitReasoning(
-    [history([100]), history([200, 600]), plain],
-    initial,
-    { countTokens },
+it("leaves histories without payload reasoning out of the reasoning error", async () => {
+  let calls = 0;
+  const result = await tune({
+    countTokens: count,
+    invokeModel: (input) =>
+      // Every third response has only plain reasoning.
+      ++calls % 3 === 0
+        ? modelWith(() => [
+            { type: "reasoning", text: "Visible." },
+            { type: "text", text: "Done." },
+          ])(input)
+        : fakeModel(input),
+  });
+  const reasoning = result.report.reasoning!;
+  expect(reasoning.metrics.reasoning.after.count).toBeLessThan(
+    reasoning.histories.length,
   );
-  expect(countTokens).toHaveBeenCalledTimes(5);
-  // Only histories with payload reasoning enter the reasoning metrics.
-  expect(result.metrics.reasoning.after.count).toBe(2);
+  expect(result.profile.perReasoningPayloadChar).toBeCloseTo(0.5, 4);
 });
 
-it("keeps the initial costs and reports why when the data cannot identify them", async () => {
-  const collinear = await fitReasoning(
-    [history([100]), history([100, 100])],
-    initial,
-    { countTokens: count },
+it("keeps the initial costs and reports why when the histories cannot identify them", async () => {
+  const defaults = resolveProfile();
+  // Every payload has the same length, so blocks and characters move together.
+  const collinear = await tune({
+    countTokens: count,
+    invokeModel: modelWith(() => [
+      signed(100),
+      { type: "text", text: "Done." },
+    ]),
+  });
+  expect(collinear.report.reasoning!.reason).toBe("collinear");
+  expect(collinear.profile.perReasoningPayloadChar).toBe(
+    defaults.perReasoningPayloadChar,
   );
-  expect(collinear.reason).toBe("collinear");
-  expect(collinear.profile).toEqual(initial);
-  const absent = await fitReasoning(
-    [history([]), history([], "Other.")],
-    initial,
-    { countTokens: count },
-  );
-  expect(absent.reason).toBe("absent");
-  expect(absent.profile).toEqual(initial);
   // Costs that fall as payloads grow are impossible.
   const plain = createUsageEstimator({ ...initial, ...zero });
-  const falling = (input: UsageInput): number =>
-    plain.count(input) +
-    input.messages.reduce(
-      (sum, message) =>
-        sum +
-        (Array.isArray(message.content)
-          ? message.content.reduce(
-              (total, part) =>
-                part.type === "reasoning"
-                  ? total +
-                    400 -
-                    0.5 *
-                      (part.providerOptions!.anthropic!.signature as string)
-                        .length
-                  : total,
-              0,
-            )
-          : 0),
-      0,
+  const payloads = (input: UsageInput): number[] =>
+    input.messages.flatMap((message) =>
+      Array.isArray(message.content)
+        ? message.content.flatMap((part) =>
+            part.type === "reasoning" && part.providerOptions?.anthropic
+              ? [(part.providerOptions.anthropic.signature as string).length]
+              : [],
+          )
+        : [],
     );
-  const invalid = await fitReasoning(
-    [history([100]), history([300]), history([200, 400])],
-    initial,
-    { countTokens: falling },
+  const invalid = await tune({
+    countTokens: (input) =>
+      plain.count(input) +
+      payloads(input).reduce((sum, length) => sum + 400 - 0.5 * length, 0),
+    invokeModel: (input) => fakeModel(input),
+  });
+  expect(invalid.report.reasoning!.reason).toBe("invalid");
+  expect(invalid.profile.perReasoningPayloadChar).toBe(
+    defaults.perReasoningPayloadChar,
   );
-  expect(invalid.reason).toBe("invalid");
-  expect(invalid.profile).toEqual(initial);
 });
 
-it("propagates counter errors rather than fitting incomplete reasoning data", async () => {
+it("propagates counter errors from the reasoning phase", async () => {
   await expect(
-    fitReasoning([history([100]), history([200, 300])], initial, {
-      countTokens: () => {
-        throw new Error("Counter failed");
+    tune({
+      countTokens: (input) => {
+        if (JSON.stringify(input).includes("signature"))
+          throw new Error("Counter failed");
+        return count(input);
       },
+      invokeModel: (input) => fakeModel(input),
     }),
   ).rejects.toThrow("Counter failed");
 });
@@ -304,36 +209,41 @@ function fakeModel(input: UsageInput, mark = "x"): UsageInput["messages"] {
   ];
 }
 
-it("tunes reasoning only when invokeModel is given, after the free phases, with current-turn tool loops", async () => {
+it("tunes reasoning only when invokeModel is given", async () => {
   const withoutModel = await tune({ countTokens: count });
   expect(withoutModel.report.reasoning).toBeNull();
-
-  const invokeModel = vi.fn((input: UsageInput) => fakeModel(input));
-  const drops = createUsageEstimator({
-    ...initial,
-    perReasoningPayloadChar: 0.5,
-    reasoningPayloadEnvelopeChars: 40,
-    countReasoningInPreviousTurns: false,
-  });
-  const result = await tune({
-    countTokens: (input) => drops.count(input),
-    invokeModel,
-  });
-  expect(invokeModel).toHaveBeenCalledTimes(REASONING_INVOCATIONS);
-  const reasoning = result.report.reasoning!;
-  expect(reasoning.invocations).toBe(REASONING_INVOCATIONS);
-  expect(
-    reasoning.histories.some((input) => input.messages.at(-1)!.role === "tool"),
-  ).toBe(true);
-  expect(reasoning.countReasoningInPreviousTurns).toBe(false);
-  expect(result.profile).toMatchObject({
-    perReasoningPayloadChar: expect.closeTo(0.5, 4),
-    reasoningPayloadEnvelopeChars: expect.closeTo(40, 3),
-    countReasoningInPreviousTurns: false,
-  });
-  expect(result.profile.perMessage).toBeCloseTo(initial.perMessage, 7);
-  expect(reasoning.metrics.reasoning.after.mae).toBeCloseTo(0, 6);
 });
+
+it.each([true, false])(
+  "fits payload costs and whether previous turns count them (%s)",
+  async (previous) => {
+    const invokeModel = vi.fn((input: UsageInput) => fakeModel(input));
+    const drops = createUsageEstimator({
+      ...initial,
+      perReasoningPayloadChar: 0.5,
+      reasoningPayloadEnvelopeChars: 40,
+      countReasoningInPreviousTurns: previous,
+    });
+    const result = await tune({
+      countTokens: (input) => drops.count(input),
+      invokeModel,
+    });
+    const reasoning = result.report.reasoning!;
+    expect(reasoning.invocations).toBe(invokeModel.mock.calls.length);
+    expect(
+      reasoning.histories.some(
+        (input) => input.messages.at(-1)!.role === "tool",
+      ),
+    ).toBe(true);
+    expect(result.profile).toMatchObject({
+      perReasoningPayloadChar: expect.closeTo(0.5, 4),
+      reasoningPayloadEnvelopeChars: expect.closeTo(40, 3),
+      countReasoningInPreviousTurns: previous,
+    });
+    expect(result.profile.perMessage).toBeCloseTo(initial.perMessage, 7);
+    expect(reasoning.metrics.reasoning.after.mae).toBeCloseTo(0, 6);
+  },
+);
 
 it("reports the time and billed usage of each phase and call", async () => {
   const usage = { inputTokens: 10, outputTokens: 2 };
@@ -343,7 +253,7 @@ it("reports the time and billed usage of each phase and call", async () => {
   });
   const { timing } = result.report;
   expect(timing.calls.filter((call) => call.kind === "generate")).toHaveLength(
-    REASONING_INVOCATIONS,
+    result.report.reasoning!.invocations,
   );
   expect(timing.calls.filter((call) => call.kind === "count")).toHaveLength(
     result.report.counterCalls,
@@ -378,7 +288,7 @@ it("ends a conversation when invokeModel returns null", async () => {
   });
   // Every conversation keeps only its first history.
   const { histories } = result.report.reasoning!;
-  expect(histories.length).toBeLessThan(REASONING_INVOCATIONS);
+  expect(histories.length).toBeLessThan(result.report.reasoning!.invocations);
   expect(
     histories.every(
       (input) =>

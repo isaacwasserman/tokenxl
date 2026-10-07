@@ -10,7 +10,7 @@ import {
   resolveProfile,
 } from "../src/index";
 import { DEFAULT_TEXT_PROFILE } from "../src/index.ts";
-import { FEATURE_FIELDS, Feature } from "../src/profile";
+import { ZERO_COSTS } from "./fixtures/profile-fields.ts";
 
 const STEP = 1000;
 
@@ -78,20 +78,6 @@ describe("resolveProfile", () => {
     expect(createUsageEstimator({ perTool: 1 }).profile).toEqual(
       resolveProfile({ perTool: 1 }),
     );
-  });
-
-  it("keeps the feature order in step with the feature indices", () => {
-    FEATURE_FIELDS.forEach((field, index) => {
-      expect(Feature[field]).toBe(index);
-    });
-    // Reasoning payload slots follow the weights; the payload fields set their weights.
-    expect([
-      Feature.reasoningPayloads,
-      Feature.reasoningPayloadChars,
-      Feature.previousReasoningPayloads,
-      Feature.previousReasoningPayloadChars,
-      Feature.textTokens,
-    ]).toEqual([0, 1, 2, 3, 4].map((n) => FEATURE_FIELDS.length + n));
   });
 });
 
@@ -386,7 +372,7 @@ describe("profile fields", () => {
   it("scales all estimated text by contentMultiplier", () => {
     const text = "The quick brown fox jumps over the lazy dog.";
     const zero = resolveProfile({
-      ...Object.fromEntries(FEATURE_FIELDS.map((field) => [field, 0])),
+      ...ZERO_COSTS,
       contentMultiplier: 1,
     });
     const input: UsageInput = { messages: [textMessage("user", text)] };
@@ -401,7 +387,7 @@ describe("profile fields", () => {
 
   it("applies the text ratios of the profile", () => {
     const text = "Internationalization considerations";
-    const zero = Object.fromEntries(FEATURE_FIELDS.map((field) => [field, 0]));
+    const zero = ZERO_COSTS;
     const input: UsageInput = { messages: [textMessage("user", text)] };
 
     expect(

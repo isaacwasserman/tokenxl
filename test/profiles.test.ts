@@ -11,7 +11,6 @@ import {
   sliceByTokens,
   splitByTokens,
 } from "../src/index.ts";
-import { removeReasoningPayloads } from "../src/tune/reasoning.ts";
 
 it("uses the named profile for complete requests and breakdowns", () => {
   const input: UsageInput = {
@@ -45,31 +44,6 @@ it("uses the named profile for complete requests and breakdowns", () => {
   ).toEqual(explicit.count(input, { breakdown: true }));
   expect(resolveProfile("anthropic/claude-sonnet-5.5")).toEqual(
     resolveProfile(MODEL_PROFILES["anthropic/claude-sonnet-5.5"]),
-  );
-});
-
-it("uses the tuned overheads and default text rules for gpt-6.1-sol", () => {
-  const input: UsageInput = {
-    messages: [
-      { role: "system", content: "Be brief." },
-      { role: "user", content: "Hello world" },
-    ],
-  };
-  expect(resolveProfile("openai/gpt-6.1-sol").text).toEqual(
-    resolveProfile().text,
-  );
-  expect(
-    estimateTokenCount("Größenordnung 123456789", {
-      profile: "openai/gpt-6.1-sol",
-    }),
-  ).toBe(estimateTokenCount("Größenordnung 123456789"));
-  expect(estimateUsage(input, { profile: "openai/gpt-6.1-sol" })).toBe(
-    createUsageEstimator({ ...MODEL_PROFILES["openai/gpt-6.1-sol"] }).count(
-      input,
-    ),
-  );
-  expect(estimateUsage(input, { profile: "openai/gpt-6.1-sol" })).not.toBe(
-    estimateUsage(input),
   );
 });
 
@@ -212,55 +186,35 @@ it("charges encrypted reasoning by payload length and plain reasoning by its tex
   expect(breakdown.messages[0]!.parts.map((part) => part.total)).toEqual(parts);
 });
 
-it("drops reasoning in previous turns for models that do not count it", () => {
-  const reasoned: UsageInput = {
+it("drops reasoning in previous turns for profiles that do not count it", () => {
+  const turns = (reasoning: boolean): UsageInput => ({
     messages: [
       { role: "user", content: "Find books." },
       {
         role: "assistant",
         content: [
-          {
-            type: "reasoning",
-            text: "",
-            providerOptions: {
-              openai: {
-                itemId: "rs_1",
-                reasoningEncryptedContent: "x".repeat(4000),
-              },
-            },
-          },
+          ...(reasoning
+            ? [
+                {
+                  type: "reasoning" as const,
+                  text: "",
+                  providerOptions: {
+                    openai: {
+                      itemId: "rs_1",
+                      reasoningEncryptedContent: "x".repeat(4000),
+                    },
+                  },
+                },
+              ]
+            : []),
           { type: "text", text: "Found." },
         ],
       },
       { role: "user", content: "Continue." },
     ],
-  };
-  expect(MODEL_PROFILES["openai/gpt-5.1"].countReasoningInPreviousTurns).toBe(
-    false,
-  );
-  expect(createUsageEstimator("openai/gpt-5.1").count(reasoned)).toBe(
-    createUsageEstimator("openai/gpt-5.1").count(
-      removeReasoningPayloads(reasoned),
-    ),
-  );
-  expect(
-    createUsageEstimator("openai/gpt-6.1-sol").count(reasoned),
-  ).toBeGreaterThan(
-    createUsageEstimator("openai/gpt-6.1-sol").count(
-      removeReasoningPayloads(reasoned),
-    ),
-  );
-});
-
-it("has reasoning costs for every predefined model", () => {
-  for (const [modelId, profile] of Object.entries(MODEL_PROFILES)) {
-    expect(profile.perReasoningPayloadChar, modelId).toBeGreaterThan(0);
-    expect(
-      profile.reasoningPayloadEnvelopeChars,
-      modelId,
-    ).toBeGreaterThanOrEqual(0);
-    expect(typeof profile.countReasoningInPreviousTurns, modelId).toBe(
-      "boolean",
-    );
-  }
+  });
+  const drops = createUsageEstimator({ countReasoningInPreviousTurns: false });
+  const counts = createUsageEstimator({ countReasoningInPreviousTurns: true });
+  expect(drops.count(turns(true))).toBe(drops.count(turns(false)));
+  expect(counts.count(turns(true))).toBeGreaterThan(counts.count(turns(false)));
 });

@@ -2,7 +2,7 @@ import type { ModelMessage, ToolSet } from "ai";
 import { jsonSchema, tool } from "ai";
 import { expect, it } from "vitest";
 import { createUsageEstimator, estimateUsage } from "../src/index";
-import { FEATURE_FIELDS } from "../src/profile";
+import { ZERO_COSTS } from "./fixtures/profile-fields.ts";
 
 it("shows the shape of a basic request breakdown", () => {
   expect(
@@ -173,7 +173,7 @@ it("aggregates repeated property paths across schema alternatives", () => {
 
 it("accounts for new schema costs in root and property breakdowns and cached totals", () => {
   const estimator = createUsageEstimator({
-    ...Object.fromEntries(FEATURE_FIELDS.map((field) => [field, 0])),
+    ...ZERO_COSTS,
     contentMultiplier: 2,
     perRequired: 6,
     perRequiredProp: 2,

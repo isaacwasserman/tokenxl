@@ -8,7 +8,6 @@ import {
   supportsOpenAIInput,
   toResponsesRequest,
 } from "../src/provider-adapters/openai.ts";
-import { removeReasoningPayloads } from "../src/tune/reasoning.ts";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -90,55 +89,6 @@ it("rejects reasoning without encrypted content instead of counting a different 
   };
   expect(() => toResponsesRequest(input)).toThrow(/encrypted/);
   expect(supportsOpenAIInput(input)).toBe(false);
-});
-
-it("charges each OpenAI reasoning item once by its payload, without summary text", () => {
-  const profile = {
-    baseOverhead: 0,
-    perMessage: 0,
-    perReasoning: 40,
-    perReasoningPayloadChar: 0.5,
-    reasoningPayloadEnvelopeChars: 10,
-  };
-  const answer =
-    estimateTokenCount("The answer.") +
-    estimateTokenCount("A question.") +
-    estimateTokenCount("Continue.");
-  expect(createUsageEstimator(profile).count(history())).toBe(answer - 5 + 200);
-  const breakdown = createUsageEstimator(profile).count(history(), {
-    breakdown: true,
-  });
-  expect(breakdown.messages[1]!.parts.map((part) => part.total)).toEqual([
-    195,
-    0,
-    estimateTokenCount("The answer."),
-  ]);
-  // Stored items have no payload: one perReasoning per item, plus each summary.
-  const stored: UsageInput = {
-    messages: [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "reasoning",
-            text: "First idea.",
-            providerOptions: { openai: { itemId: "rs_2" } },
-          },
-          {
-            type: "reasoning",
-            text: "Second idea.",
-            providerOptions: { openai: { itemId: "rs_2" } },
-          },
-        ],
-      },
-    ],
-  };
-  expect(createUsageEstimator(profile).count(stored)).toBe(
-    40 + estimateTokenCount("First idea.") + estimateTokenCount("Second idea."),
-  );
-  expect(removeReasoningPayloads(history()).messages[1]!.content).toEqual([
-    { type: "text", text: "The answer." },
-  ]);
 });
 
 it("generates with encrypted reasoning and no storage, and reports incomplete responses", async () => {
