@@ -95,15 +95,11 @@ function walkPart(part: LoosePart, context: WalkContext): void {
       const item = (
         part.providerOptions as { openai?: { itemId?: unknown } } | undefined
       )?.openai?.itemId;
+      const key = typeof item === "string" && item ? `openai-item:${item}` : "";
       context.sentReasoning ??= new Set();
-      const sent = context.sentReasoning;
-      if (typeof item === "string" && item) {
-        if (!sent.has(`openai-item:${item}`)) tally[Feature.perReasoning]!++;
-        sent.add(`openai-item:${item}`);
-        addText(context, part.text as string);
-        break;
-      }
-      tally[Feature.perReasoning]!++;
+      if (!key || !context.sentReasoning.has(key))
+        tally[Feature.perReasoning]!++;
+      if (key) context.sentReasoning.add(key);
       addText(context, part.text as string);
       break;
     }

@@ -215,12 +215,19 @@ function walkRootSchema(
   context: WalkContext,
   breakdown?: SchemaBreakdown,
 ): void {
-  new SchemaWalker(
-    root,
-    context,
-    breakdown?.properties,
-    breakdown,
-  ).walkObjectLevel(root, "", 0);
+  new SchemaWalker(root, context, breakdown).walkObjectLevel(root, "", 0);
+}
+
+/** Visits every schema branch of a node's `anyOf`, `oneOf`, and `allOf`. */
+function forEachBranch(
+  node: SchemaNode,
+  visit: (branch: SchemaNode) => void,
+): void {
+  for (const combinator of ["anyOf", "oneOf", "allOf"] as const) {
+    const branches = node[combinator];
+    if (Array.isArray(branches))
+      for (const branch of branches) if (isSchemaNode(branch)) visit(branch);
+  }
 }
 
 /** Resolves local references along the current path, stopping recursive references. */
@@ -235,12 +242,11 @@ class SchemaWalker {
   constructor(
     root: SchemaNode,
     context: WalkContext,
-    properties?: Record<string, PropertyBreakdown>,
     breakdown?: SchemaBreakdown,
   ) {
     this.root = root;
     this.context = context;
-    this.properties = properties;
+    this.properties = breakdown?.properties;
     this.breakdown = breakdown;
   }
 
@@ -260,15 +266,9 @@ class SchemaWalker {
 
     this.walkProperties(node, path, depth);
 
-    for (const combinator of ["anyOf", "oneOf", "allOf"] as const) {
-      const branches = node[combinator];
-      if (Array.isArray(branches)) {
-        for (const branch of branches) {
-          if (isSchemaNode(branch))
-            this.walkObjectLevel(branch, path, depth + 1);
-        }
-      }
-    }
+    forEachBranch(node, (branch) =>
+      this.walkObjectLevel(branch, path, depth + 1),
+    );
   }
 
   private walkProperties(node: SchemaNode, path: string, depth: number): void {
@@ -395,15 +395,9 @@ class SchemaWalker {
     }
     if (detail) detail.nested += tallyValue(context) - start;
 
-    for (const combinator of ["anyOf", "oneOf", "allOf"] as const) {
-      const branches = node[combinator];
-      if (Array.isArray(branches)) {
-        for (const branch of branches) {
-          if (isSchemaNode(branch))
-            this.walkValue(branch, path, depth + 1, detail);
-        }
-      }
-    }
+    forEachBranch(node, (branch) =>
+      this.walkValue(branch, path, depth + 1, detail),
+    );
   }
 
   private walkArrayItem(node: SchemaNode, path: string, depth: number): void {
@@ -421,15 +415,9 @@ class SchemaWalker {
       Array.isArray(item.oneOf) ||
       Array.isArray(item.allOf)
     ) {
-      for (const combinator of ["anyOf", "oneOf", "allOf"] as const) {
-        const branches = item[combinator];
-        if (Array.isArray(branches)) {
-          for (const branch of branches) {
-            if (isSchemaNode(branch))
-              this.walkArrayItem(branch, path, depth + 1);
-          }
-        }
-      }
+      forEachBranch(item, (branch) =>
+        this.walkArrayItem(branch, path, depth + 1),
+      );
     } else {
       if (isPrimitiveSchema(item))
         this.context.tally[Feature.perArrayOfPrimitives]!++;

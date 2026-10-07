@@ -63,23 +63,7 @@ export function createUsageEstimator(
       tools: { total: 0, overhead: 0, definitions: Object.create(null) },
     };
 
-    const lastUser = input.messages.findLastIndex(
-      (message) => message.role === "user",
-    );
-    for (const [index, message] of input.messages.entries()) {
-      const messageBreakdown: MessageBreakdown = {
-        role: message.role,
-        total: 0,
-        overhead: 0,
-        parts: [],
-      };
-      context.priorTurn = index < lastUser;
-      walkMessage(message, context, messageBreakdown);
-      breakdown.messages.push(messageBreakdown);
-    }
-    if (input.tools)
-      walkToolSet(input.tools, context, options, breakdown.tools, toolCache);
-
+    walkInput(input, context, options, toolCache, breakdown);
     breakdown.total = Math.round(tallyValue(context));
     return breakdown;
   }
@@ -173,6 +157,7 @@ function walkInput(
   context: WalkContext,
   options: EstimatorOptions,
   toolCache?: ToolCache,
+  breakdown?: UsageBreakdown,
 ): void {
   // Reasoning before the last user message belongs to an earlier turn.
   const lastUser = input.messages.findLastIndex(
@@ -180,8 +165,15 @@ function walkInput(
   );
   for (const [index, message] of input.messages.entries()) {
     context.priorTurn = index < lastUser;
-    walkMessage(message, context);
+    const messageBreakdown: MessageBreakdown | undefined = breakdown && {
+      role: message.role,
+      total: 0,
+      overhead: 0,
+      parts: [],
+    };
+    walkMessage(message, context, messageBreakdown);
+    if (messageBreakdown) breakdown!.messages.push(messageBreakdown);
   }
   if (input.tools)
-    walkToolSet(input.tools, context, options, undefined, toolCache);
+    walkToolSet(input.tools, context, options, breakdown?.tools, toolCache);
 }

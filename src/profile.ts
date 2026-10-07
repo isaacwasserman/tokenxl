@@ -155,12 +155,14 @@ export function resolveProfile(
 }
 
 /** Fields that are a weight of one tally slot each; the reasoning payload fields set four slots together. */
-export const FEATURE_FIELDS: readonly Exclude<
+type FeatureField = Exclude<
   ProfileField,
   | "contentMultiplier"
   | "perReasoningPayloadChar"
   | "reasoningPayloadEnvelopeChars"
->[] = [
+>;
+
+export const FEATURE_FIELDS: readonly FeatureField[] = [
   "baseOverhead",
   "perMessage",
   "perSystem",
@@ -188,43 +190,26 @@ export const FEATURE_FIELDS: readonly Exclude<
   "perAdditionalPropertiesTrue",
 ];
 
-/** Index of each feature in a tally. */
-export const Feature = {
-  baseOverhead: 0,
-  perMessage: 1,
-  perSystem: 2,
-  toolsExist: 3,
-  perTool: 4,
-  perDesc: 5,
-  perFirstProp: 6,
-  perAdditionalProp: 7,
-  perPropDesc: 8,
-  perEnum: 9,
-  perNestedObject: 10,
-  perArrayOfObjects: 11,
-  perToolCall: 12,
-  perToolResult: 13,
-  perImage: 14,
-  perFile: 15,
-  perReasoning: 16,
-  perEnumValue: 17,
-  perRequired: 18,
-  perRequiredProp: 19,
-  perAdditionalProperties: 20,
-  perInteger: 21,
-  perBoolean: 22,
-  perArrayOfPrimitives: 23,
-  perAdditionalPropertiesTrue: 24,
-  // Reasoning payload blocks and characters, in the current turn and in previous
-  // turns. Their weights come from the payload fields, not from one field each.
-  reasoningPayloads: 25,
-  reasoningPayloadChars: 26,
-  previousReasoningPayloads: 27,
-  previousReasoningPayloadChars: 28,
-  textTokens: 29,
-} as const;
+// Reasoning payload blocks and characters, in the current turn and in previous
+// turns, follow the field slots. Their weights come from the payload fields,
+// not from one field each.
+const PAYLOAD_SLOTS = [
+  "reasoningPayloads",
+  "reasoningPayloadChars",
+  "previousReasoningPayloads",
+  "previousReasoningPayloadChars",
+  "textTokens",
+] as const;
 
-export const TALLY_LENGTH: number = FEATURE_FIELDS.length + 5;
+/** Index of each feature in a tally. */
+export const Feature: Readonly<
+  Record<FeatureField | (typeof PAYLOAD_SLOTS)[number], number>
+> = Object.fromEntries(
+  [...FEATURE_FIELDS, ...PAYLOAD_SLOTS].map((name, index) => [name, index]),
+) as never;
+
+export const TALLY_LENGTH: number =
+  FEATURE_FIELDS.length + PAYLOAD_SLOTS.length;
 
 /** A profile in the form the walker uses: one weight for each tally slot. */
 export interface CompiledProfile {
