@@ -82,3 +82,13 @@ A before/after request pair that changes known features. Its actual token-count 
 
 **Reasoning payloads**:
 A reasoning part with an encrypted payload (Anthropic `signature` or `redactedData`, OpenAI `reasoningEncryptedContent`, OpenRouter `reasoning_details`) costs `perReasoningPayloadChar × (length − reasoningPayloadEnvelopeChars)`; its visible summary is not counted, because the provider charges the decrypted hidden thinking. `countReasoningInPreviousTurns` says whether reasoning before the last user message is counted or dropped. The costs belong to the model, not to a reasoning level. `tuneProfile` fits them from at most 10 generated responses when it receives `invokeModel`. See "Tune a model profile" in the README.
+
+## Tuning method
+
+`tuneProfile` (src/tune/calibrate.ts) runs three fits on the built-in corpus (src/tune/corpus.ts), each with everything fitted earlier locked:
+
+1. **Text.** One-character-word anchors give the multiplier and the single-message intercept. Labeled contrasts measure each ratio and gate (the short-segment gate together with punctuation); the German, Romance and Slavic Latin accent rules have no contrasts and are fitted on running text only. Natural-text refinement then searches the values where `ceil(length / ratio)` changes, one field at a time for four rounds, and separate selection documents choose among the initial rules, the probe calibration and each round. Ratios stay at or above 1 / (UTF-8 bytes per character).
+2. **Overhead.** Every text fragment in the overhead probes is counted alone, so controlled before/after differences isolate the structural costs, which a rank-revealing QR solve fits.
+3. **Reasoning** (only with `invokeModel`). At most 10 generations: 4 text prompts (two get a follow-up) and 2 tool-use prompts. Each history is counted with and without its payload reasoning parts; the difference isolates the hidden cost. A weighted least-squares fit gives a per-block and a per-character cost, once with previous-turn reasoning counted and once dropped, and keeps the better case; the negative per-block cost is stored as the envelope length.
+
+Validation requests only report errors. Unmeasurable fields keep their initial values and are reported as `absent`, `collinear` or `invalid`.

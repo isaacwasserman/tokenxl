@@ -192,9 +192,15 @@ Omit `profile` to use the existing defaults. Custom profile objects are also acc
 
 #### Reasoning
 
-Anthropic returns thinking as a visible summary (or nothing) plus an encrypted `signature`; redacted thinking has only `redactedData`. OpenAI returns reasoning summaries plus `reasoningEncryptedContent` when requested with `store: false`. Through OpenRouter, the AI SDK provider keeps these payloads in `providerOptions.openrouter.reasoning_details`. When the history is sent back, the provider decrypts the payload; Anthropic's measured counts show that it charges the hidden thinking, not the summary. A reasoning payload in `providerOptions.anthropic`, `providerOptions.openai`, or `providerOptions.openrouter` therefore costs `perReasoningPayloadChar × (payload length − reasoningPayloadEnvelopeChars)`, and its summary text is not counted. The envelope is the part of every payload that holds no thinking: encryption header, nonce, tag, and metadata. Reasoning before the last user message belongs to a previous turn. Some models count it at the same cost (`countReasoningInPreviousTurns: true`: Claude Sonnet 5.5, GPT-6.1 Sol); others drop it, so it costs nothing (`false`: Claude Sonnet 4.5, GPT-5.1). Reasoning in the current turn, such as before a tool call, is always counted. The AI SDK splits an OpenAI reasoning item into one part per summary, so parts with the same `itemId` are charged once. Other reasoning parts cost `perReasoning` plus their text; stored OpenAI items (sent as references, without a payload) fall in this group and are underestimated. The defaults are an upper bound of the measured models, so a request without a profile overestimates reasoning; each predefined profile has its own costs.
+Reasoning models return an encrypted payload with each reasoning part (Anthropic `signature` or `redactedData`, OpenAI `reasoningEncryptedContent` with `store: false`, OpenRouter `reasoning_details`). When the history is sent back, the provider charges the hidden thinking inside it, not the visible summary, so the payload's length is the estimate:
 
-The costs do not depend on the reasoning level: every level of a model uses the same encryption, and per-level fits differed no more than two samples of one level. A level at which the model does not reason produces no payloads. Display mode (summarized or omitted) showed no bias. See [reasoning calibration](#reasoning-payloads) for accuracy and limits.
+```text
+reasoning part with an encrypted payload = perReasoningPayloadChar * (payload length - reasoningPayloadEnvelopeChars)
+                                          (0 before the last user message when countReasoningInPreviousTurns is false)
+other reasoning part                     = perReasoning + its text
+```
+
+The envelope is the part of every payload that holds no thinking. Reasoning before the last user message belongs to an earlier turn; some models charge it in full (`countReasoningInPreviousTurns: true`: Claude Sonnet 5.5, GPT-6.1 Sol) and others drop it (`false`: Claude Sonnet 4.5, GPT-5.1). OpenAI reasoning parts that share an `itemId` are charged once. Stored OpenAI items (the AI SDK default `store: true`) are sent as references without a payload and are underestimated. The costs belong to the model, not to the reasoning level, and the defaults are an upper bound of the measured models, so a request without a profile overestimates reasoning.
 
 ### Text ratios
 
@@ -255,117 +261,31 @@ To measure speed against gpt-tokenizer and ai-tokenizer, run `pnpm benchmark`.
 
 ## Tune a model profile
 
-Import `tuneProfile` from `tokenx/tune`, and a provider adapter from `tokenx/provider-adapters`. An adapter is how the tuner reaches a model:
-
-```ts
-interface ProviderAdapter {
-  countTokens: GroundTruthCounter // the provider's input-token count for a request
-  invokeModel?: ModelInvoker // response messages, for reasoning calibration
-  supportsInput?: (input: UsageInput) => boolean // probes the provider rejects are skipped
-}
+```sh
+pnpm tune --provider <anthropic|openai|openrouter> --model <id> [--write] [--profile]
 ```
 
-`createProviderAdapter('anthropic' | 'openai' | 'openrouter', { apiKey, modelId, reasoningLevel? })` returns one; `reasoningLevel` is the effort of its generated responses, sent as each provider's effort setting, and without it the model uses its default; any object of this shape works. The tuner makes no provider requests itself and has no optimizer dependency.
+`pnpm tune` measures a model and prints its entry for `src/profiles.json`; `--write` adds or replaces it there, and `--profile` prints the time and cost of each phase. API keys come from `.env` (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`).
+
+- **What it measures:** text rules and request overhead from token counts, which are free on Anthropic and OpenAI; OpenRouter has no count endpoint, so each count is a billed 1-token generation. Reasoning costs come from at most 10 generations at `high` effort, each capped at 4,096 output tokens (about $0.05–0.15 per run). A model without effort levels, such as Claude Sonnet 4.5, keeps the reasoning costs it already has.
+- **Key:** `provider/model`, with dated snapshot suffixes removed and version separators written as dots (`claude-sonnet-4-5-20250929` becomes `anthropic/claude-sonnet-4.5`).
+- **Entry:** the tuned profile, without `text` when the default text rules predicted held-out documents better than the tuned ones.
+
+The same tuner is a library:
 
 ```ts
 import { createProviderAdapter } from 'tokenx/provider-adapters'
 import { tuneProfile } from 'tokenx/tune'
 
-const adapter = createProviderAdapter('openai', { apiKey, modelId: 'gpt-6.1-sol' })
+const adapter = createProviderAdapter('openai', { apiKey, modelId: 'gpt-6.1-sol', reasoningLevel: 'high' })
 const { profile, report } = await tuneProfile({ ...adapter, concurrency: 16 })
 ```
 
-The result is a complete profile, ready for `createUsageEstimator` and for `src/profiles.json`. Without `invokeModel`, or when the model did not reason, the reasoning costs keep their initial values.
+An adapter is any `{ countTokens, invokeModel?, supportsInput? }`: `countTokens` returns the provider's input-token count (or `{ count, usage }` when counting is billed), `invokeModel` returns the response messages in AI SDK form (or `{ messages, usage }`), and `supportsInput` skips requests the provider rejects. Without `invokeModel`, reasoning costs keep their initial values. Other options: `initial` (default `DEFAULT_PROFILE`), `concurrency` (default 4), `onProgress`, and `signal`. `report` holds the fit diagnostics, validation errors, and the time and billed tokens of every phase and call.
 
-The tuner always uses its built-in inputs: controlled probes, natural text samples, separate selection documents, and validation requests, built from the excerpts in `src/tune/corpus/` (sources and licenses in `NOTICE`). Validation requests only report errors; they never fit or select a profile.
-
-| Option | Default | Purpose |
-| --- | --- | --- |
-| `countTokens` | Required | Return a finite nonnegative ground-truth input count, or `{ count, usage }` when counting is billed |
-| `supportsInput` | None | Skip probes and validation requests the provider rejects |
-| `invokeModel` | None | Return the model's response messages, or `{ messages, usage }` with the billed tokens; when given, the tuner also fits reasoning costs (at most 10 calls, usually paid) |
-| `initial` | `DEFAULT_PROFILE` | Starting profile; unmeasurable fields retain these values |
-| `concurrency` | `4` | Maximum simultaneous counter calls and model calls |
-| `onProgress` | None | Collection counts, model calls, and fitting events |
-| `signal` | None | Abort collection or calibration |
-
-### Calibration
-
-1. **Text.** One-character word anchors identify the multiplier and single-message intercept. Labeled contrasts then measure individual ratios and gates, except the German, Romance, and Slavic Latin accent rules: they price a whole language through its accented words, so their ratios are fitted only on running text, including authored paragraphs in French, Spanish, Polish, Czech, Russian, and Greek; punctuation and the short-segment gate are measured together. Optional natural-text samples refine composition with the scale locked. The search considers the thresholds at which `ceil(length / ratio)` changes, including offsets for mixed CJK text, and integer values for gates. It searches one field at a time over four rounds. Separate selection documents choose among the initial text rules, the probe calibration, and each round; otherwise training loss chooses. Ratios stay at or above 1 / (UTF-8 bytes per character): 1 for ASCII and accented Latin words, 1/2 for Cyrillic and Greek, 1/3 for CJK, and 1/4 for emoji. Context contrasts diagnose boundary effects without fitting parameters.
-2. **Overhead.** Each distinct text fragment in the overhead probes is counted directly during the text phase, with the measured intercept subtracted. Controlled request differences then identify structural coefficients using a rank-revealing QR solve, with the entire text profile locked. This prevents heuristic text errors from being absorbed into overhead weights.
-
-Default probe lengths are 128, 512, and 2,048 code points. Probes the provider rejects (`supportsInput`) are skipped. Providers requiring complete tool exchanges cannot identify call and result overhead separately; one coefficient retains its initial value.
-
-Shared controls are counted once within a tuning run. Plain single-user requests share observations by their text; structured controls share their request object. Subsequent runs collect fresh counts. There are no persistent caches, hashes, or namespaces.
-
-
-Counter errors propagate and stop scheduling new requests. Cancellation rejects promptly; pass the same signal to the provider client to cancel requests in flight. `onProgress` reports `stage: 'text' | 'overhead' | 'validation'` with `phase: 'collect'`, or a text/overhead `phase: 'fit'` event.
-
-### Reports
-
-`TuneReport` contains `counterCalls`, `timing`, `text`, `overhead`, `validation`, and final field diagnostics. `timing` lists each phase and each counter and model call, with times in milliseconds from the start of the run and the billed tokens that the counter or model reported. Text reports include the multiplier, nuisance intercept, anchor RMSE and R², per-rule residuals, natural-text refinement, and context residuals. Absent or collinear structural fields retain their initial values. Text-field identifiability means a probe responds to that field; equivalent ratio plateaus can remain.
-
-Common error metrics report count, mean absolute token error (`mae`), mean squared relative error (`loss`), mean absolute percentage error (`mape`), signed mean percentage error, maximum absolute percentage error, and signed aggregate percentage error. Relative errors use a denominator of at least one; empty samples return zeros.
-
-`report.overhead.contrasts` instead reports structural RMSE and maximum error **in tokens**, plus the fraction reproduced within numerical tolerance. Its directly measured text costs differ from the heuristic text estimates used by whole-request metrics. Exact contrasts therefore do not imply exact total token counts. Tokenization can vary with formatting, and schema features missing from the tally remain unmodeled.
-
-### Adding a model: `pnpm tune`
-
-```sh
-pnpm tune --provider <anthropic|openai|openrouter> --model <id> [--write] [--profile]
-```
-
-The command calls `tuneProfile` with the provider adapter and prints the registry entry. With `--write`, it adds or replaces the entry in `src/profiles.json`. API keys come from `.env` (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`).
-
-- **Key:** `provider/model`, with dated snapshot suffixes removed and version separators written as dots (`anthropic/claude-sonnet-4-5` becomes `anthropic/claude-sonnet-4.5`). OpenRouter model IDs are already keys.
-- **Entry:** the tuned profile. It has no `text` when the default text rules predicted the selection documents better than the tuned ones.
-- **Reasoning:** at most 10 billed model calls. The costs do not depend on the reasoning level, so the command generates at `high` effort to make sure the model reasons. A model that OpenRouter's public model list shows without effort levels, such as Claude Sonnet 4.5, has no effort to set: the command tunes its text and overhead costs and keeps the reasoning costs it already has. Each response is capped at 4,096 output tokens, thinking included; in saved Claude Opus 5.5 runs at medium effort, the longest response used 1,193. A run in which the model did not reason fails.
-- **Profile:** with `--profile`, the command prints the time, calls, billed tokens, and cost of each phase from `report.timing`, at the list prices in OpenRouter's public model list. A failed run prints no profile.
-- **Costs:** Anthropic and OpenAI count with free endpoints. OpenRouter has no counting endpoint, so its adapter counts with 1-token generations, and each count bills its prompt.
-- **Files:** the command writes nothing except `src/profiles.json` with `--write`. Generated responses are not saved, so a rerun generates them again.
-
-
-#### Adapters
-
-- **Anthropic** counts with CountTokens and generates with the Messages API, keeping signed and redacted thinking blocks. Without a level, it sends no thinking settings, so the model uses its defaults.
-- **OpenAI** counts with `POST /v1/responses/input_tokens` and generates with the Responses API (`store: false`, `include: ['reasoning.encrypted_content']`), sending each reasoning item with its encrypted content.
-- **OpenRouter** uses the AI SDK provider `@openrouter/ai-sdk-provider` (with `ai`, optional peer dependencies). It counts with a 1-token generation with reasoning disabled, falling back to 16 tokens or default reasoning when a model rejects that, and reads the reported prompt tokens, which are the upstream model's native count. Leading system messages are sent as AI SDK `instructions`; requests with a later system message are skipped.
-
-Providers that require each tool call to be answered skip probes with unanswered calls, so call and result overheads are not separable; `perToolCall` holds their sum. Reasoning without an encrypted payload is skipped for Anthropic and OpenAI, which reject it.
-
-### Reasoning payloads
-
-The input-token model for reasoning is:
-
-```text
-reasoning part with an encrypted payload = perReasoningPayloadChar * (payload length - reasoningPayloadEnvelopeChars)
-                                          (0 before the last user message when countReasoningInPreviousTurns is false)
-other reasoning part                     = perReasoning + its text
-```
-
-The estimator reads the payloads where each provider's AI SDK integration stores them: the Anthropic `signature` or `redactedData`; OpenAI `reasoningEncryptedContent`, once per reasoning item; and OpenRouter `reasoning_details` (encrypted `data` or a text detail's `signature`), from the message, its first tool call, or its first reasoning part, with unsigned Anthropic and Gemini text details dropped and duplicates sent once, as `@openrouter/ai-sdk-provider` sends them. Its visible summary is not counted. Paired counts show why: removing a thinking block removes the hidden thinking, and the summary added no information to the fit. The configuration does not change counts: the same history gives the same CountTokens result with any effort and display setting, or with none.
-
-Real signatures come only from model responses, so these fields need `invokeModel`. When it is given, `tuneProfile` first completes the free text and overhead phases. Then it runs built-in conversations: 4 text prompts, of which two get a second response after a follow-up message, and 2 tool-use prompts that need reasoning before the tool call, where the tuner answers the call with a fixed result and asks for the final answer. That is at most 10 model calls. There are no validation generations: they only reported error, and each costs a paid call. Each history after a response is a sample: histories that end with a follow-up message measure earlier-turn reasoning, and histories that end with a tool result measure current-turn reasoning. The callback receives a history that ends with a user message or a tool result, plus the abort signal, and returns the response messages in AI SDK form, including tool calls, or `null` to end that conversation (for example after an incomplete response). Pass `input.tools` to the model. Enable thinking in the model call. A model error stops tuning.
-
-```ts
-import { generateText } from 'ai'
-import { tuneProfile } from 'tokenx/tune'
-
-const { profile, report } = await tuneProfile({
-  countTokens,
-  invokeModel: async (input, { signal }) => (await generateText({ model, ...input, abortSignal: signal, providerOptions })).response.messages,
-})
-```
-
-The callback chooses the reasoning level; make sure the model reasons at it. The costs belong to the model, not to the level: every level uses the same encryption, and on 60 saved Claude Opus 5.5 histories at one level, fits on separate halves differed as much as the earlier per-level fits did.
-
-Model calls usually consume credits. `report.reasoning.histories` returns the generated histories, so they can be saved and refit later without new model calls. Without `invokeModel`, `report.reasoning` is `null`. If the histories cannot identify the costs, for example because the model did not reason, the costs keep their initial values and `report.reasoning.reason` gives `absent`, `collinear`, or `invalid`.
-
-The tuner counts each history twice: as given and without its payload reasoning parts. A message left empty is removed, and its locked cost is subtracted. It fits a per-block and a per-character cost twice: once with previous-turn reasoning at the same cost as current-turn reasoning, and once with previous-turn reasoning at zero, and keeps the case with the lower training loss as `countReasoningInPreviousTurns`. The per-block cost is negative, because each payload has a fixed envelope that holds no thinking; it is stored as the envelope length, `reasoningPayloadEnvelopeChars = −(per-block cost) / perReasoningPayloadChar`. `report.reasoning.turns` gives the number of histories with reasoning in each turn; the choice is measured only when both are present. The difference isolates the hidden cost, so text and structural errors cannot enter the two coefficients. A weighted least-squares solve minimizes relative error, so long histories do not dominate. Text rules and every other field stay locked. `report.reasoning.metrics` gives the error of the hidden cost alone (`reasoning`) and of complete requests (`request`) on the generated histories, before and after the fit.
+The built-in adapters use the AI SDK: Anthropic and OpenAI through `@ai-sdk/anthropic` and `@ai-sdk/openai`, which count by sending the exact request body the package builds to the free count endpoint, and OpenRouter through `@openrouter/ai-sdk-provider`. Each is an optional peer dependency, with `ai` 7.
 
 ### Measured profiles
-
-Measured on 2026-10-06. Text rules and overheads come from free counting. Reasoning costs come from generated histories, including tool-use loops, counted with and without their payloads. A model counts previous-turn reasoning either at exactly the same cost as in the current turn or not at all; the same block, counted in both positions, confirmed this for every block measured.
 
 | Model | Text rules | `perReasoningPayloadChar` / `reasoningPayloadEnvelopeChars` | `countReasoningInPreviousTurns` |
 | --- | --- | --- | --- |
@@ -375,13 +295,9 @@ Measured on 2026-10-06. Text rules and overheads come from free counting. Reason
 | `openai/gpt-5.1` | defaults | 0.2196 / 1209.6 | `false` |
 | `openai/gpt-6.1-sol` | defaults | 0.1641 / 1121.3 | `true` |
 
-The reasoning costs were measured per level before they became one value per model. Claude Sonnet 5.5 was retuned on 2026-10-07 with `pnpm tune` (10 generations at high effort, accent ratios fitted on running text); GPT-6.1 Sol uses its fit over the histories of all levels; GPT-5.1 uses the mean of its low, medium and high fits; Claude Sonnet 4.5 uses its only level, a 4,096-token thinking budget; Claude Opus 5.5 uses all 60 saved histories at medium.
+Claude Sonnet 5.5 was retuned on 2026-10-07 with `pnpm tune`. The other reasoning costs were measured per level before they became one value per model: GPT-6.1 Sol uses its fit over all levels, GPT-5.1 the mean of its low, medium and high fits, Claude Sonnet 4.5 its 4,096-token thinking budget, and Claude Opus 5.5 all 60 saved histories at medium. The OpenAI profiles keep the default text rules, which generalized better than a tuned set.
 
-The OpenAI profiles use the default text rules: they were calibrated against o200k and generalized better than a tuned set. Every Sonnet 5.5 overhead contrast is reproduced exactly and every Sonnet 4.5 contrast within 1 token; OpenAI schemas still differ by up to 4 tokens per contrast on property descriptions, nested objects, required lists, and tool exchanges.
-
-#### Holdout
-
-The profiles were frozen, then evaluated once on data that no tuning or profile choice used: 12 new documents (Wikipedia articles in 8 languages, Python and Rust source, a GitHub API response, a README) at two lengths in three request shapes, 18 new tool requests, and new reasoning conversations at every supported level. These results were measured with the earlier per-level reasoning costs. Mean absolute error / aggregate error against each provider's count:
+Holdout, measured once on data no tuning used, with the earlier per-level reasoning costs (mean absolute error / aggregate error against each provider's count):
 
 | Request set | Model | tokenx 2.1.0 | ai-tokenizer 1.0.7 | This profile |
 | --- | --- | ---: | ---: | ---: |
@@ -399,8 +315,6 @@ The profiles were frozen, then evaluated once on data that no tuning or profile 
 | Reasoning histories (65) | GPT-6.1 Sol | 26.1% / −41.8% | 42.5% / −57.8% * | 7.6% / −9.8% |
 
 \* ai-tokenizer has no entry for the model; its Claude Sonnet 4.5 or GPT-5.1 Thinking entry is used. tokenx 2.1.0 counts text only, with tool definitions serialized as JSON.
-
-Stored OpenAI reasoning items (the AI SDK default `store: true`) are sent as references without a payload and are underestimated.
 
 ## API
 
