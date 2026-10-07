@@ -1,7 +1,7 @@
 import type { ResolvedModelProfile } from "../profile.ts";
 import { listCandidateValues } from "./candidates.ts";
 import type { Sample } from "./collect.ts";
-import { throwIfAborted } from "./collect.ts";
+
 import type { ResolvedText, Rule, TextField } from "./text.ts";
 import {
   ALL_TEXT_FIELDS,
@@ -16,7 +16,7 @@ import type {
   TextRuleCalibrationReport,
 } from "./types.ts";
 
-export interface MeasuredTextProbe {
+interface MeasuredTextProbe {
   field: TextField;
   before: Sample;
   after: Sample;
@@ -113,7 +113,7 @@ function fitProbeFamily(
       0,
     );
   const search = (index: number): void => {
-    throwIfAborted(signal);
+    signal?.throwIfAborted();
     if (index < fields.length) {
       for (const candidate of candidates[index]!) {
         values[index] = candidate;

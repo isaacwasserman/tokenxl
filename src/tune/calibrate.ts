@@ -1,11 +1,11 @@
 import type { ResolvedModelProfile } from "../profile.ts";
-import { FEATURE_FIELDS, resolveProfile } from "../profile.ts";
+import { compileProfile, FEATURE_FIELDS, resolveProfile } from "../profile.ts";
+import { tallyUsage } from "../usage/estimator.ts";
 import type { UsageInput } from "../usage/types.ts";
-import { extractChargedTexts } from "./charged-texts.ts";
 import type { Collected, CollectionOptions, Sample } from "./collect.ts";
-import { collectSamples, throwIfAborted } from "./collect.ts";
+import { collectSamples } from "./collect.ts";
 import { tuningCorpus } from "./corpus.ts";
-import { measureErrors } from "./fit.ts";
+import { measureErrors, solveLeastSquares } from "./fit.ts";
 import {
   fitReasoning,
   generateHistories,
@@ -36,7 +36,7 @@ import type {
  * reasoning costs with everything else locked.
  */
 export async function tuneProfile(options: TuneOptions): Promise<TuneResult> {
-  throwIfAborted(options.signal);
+  options.signal?.throwIfAborted();
   const {
     probes: designed,
     textSamples: trainInputs,
@@ -221,7 +221,7 @@ export async function tuneProfile(options: TuneOptions): Promise<TuneResult> {
   };
   recordPhase("text", "fit", textFitStart);
   options.onProgress?.({ stage: "text", phase: "fit" });
-  throwIfAborted(options.signal);
+  options.signal?.throwIfAborted();
 
   const overheadData = await collectStageSamples(
     "overhead",
@@ -238,7 +238,7 @@ export async function tuneProfile(options: TuneOptions): Promise<TuneResult> {
   const fitted = fitOverhead(contrasts, locked, options.signal);
   recordPhase("overhead", "fit", overheadFitStart);
   options.onProgress?.({ stage: "overhead", phase: "fit" });
-  throwIfAborted(options.signal);
+  options.signal?.throwIfAborted();
 
   // Generation runs only after the free phases succeed, so a failure there costs no model calls.
   let profile = fitted.profile;
@@ -272,7 +272,7 @@ export async function tuneProfile(options: TuneOptions): Promise<TuneResult> {
     });
     recordPhase("reasoning", "fit", fitStart);
     options.onProgress?.({ stage: "reasoning", phase: "fit" });
-    throwIfAborted(options.signal);
+    options.signal?.throwIfAborted();
     profile = fit.profile;
     reasoning = {
       invocations,
@@ -396,7 +396,7 @@ function fitOverhead(
   const targets: number[] = [];
   const anchors = new Set<Sample>();
   for (const probe of probes) {
-    throwIfAborted(signal);
+    signal?.throwIfAborted();
     // Absolute controls identify baseOverhead, which cancels in every delta.
     if (!anchors.has(probe.before)) {
       anchors.add(probe.before);
@@ -423,67 +423,15 @@ function fitOverhead(
         0,
       ),
   );
-  const basis: number[][] = [];
-  const triangular: number[][] = [];
-  const active: { index: number; norm: number }[] = [];
-  const reasons = new Map<number, "absent" | "collinear">();
-  for (let index = 0; index < FEATURE_FIELDS.length; index++) {
-    throwIfAborted(signal);
-    const column = rows.map((row) => row[index]!);
-    const norm = Math.sqrt(
-      column.reduce((sum, value) => sum + value * value, 0),
-    );
-    if (!norm) {
-      reasons.set(index, "absent");
-      continue;
-    }
-    for (let n = 0; n < column.length; n++) column[n]! /= norm;
-    const projections = Array.from<number>({ length: basis.length }).fill(0);
-    // Reorthogonalize to avoid inaccurate rank decisions for similar columns.
-    for (let pass = 0; pass < 2; pass++) {
-      basis.forEach((direction, k) => {
-        const projection = direction.reduce(
-          (sum, value, n) => sum + value * column[n]!,
-          0,
-        );
-        projections[k]! += projection;
-        for (let n = 0; n < column.length; n++)
-          column[n]! -= projection * direction[n]!;
-      });
-    }
-    const diagonal = Math.sqrt(
-      column.reduce((sum, value) => sum + value * value, 0),
-    );
-    if (diagonal <= 1e-8) {
-      reasons.set(index, "collinear");
-      continue;
-    }
-    for (let n = 0; n < column.length; n++) column[n]! /= diagonal;
-    for (let k = 0; k < basis.length; k++) triangular[k]!.push(projections[k]!);
-    triangular.push([
-      ...Array.from<number>({ length: basis.length }).fill(0),
-      diagonal,
-    ]);
-    basis.push(column);
-    active.push({ index, norm });
-  }
-  const coefficients = basis.map((direction) =>
-    direction.reduce((sum, value, n) => sum + value * rhs[n]!, 0),
-  );
-  for (let k = active.length - 1; k >= 0; k--) {
-    for (let j = k + 1; j < active.length; j++)
-      coefficients[k]! -= triangular[k]![j]! * coefficients[j]!;
-    coefficients[k]! /= triangular[k]![k]!;
-  }
+  const { coefficients, reasons } = solveLeastSquares(rows, rhs, signal);
   const profile = { ...locked };
-  for (let k = 0; k < active.length; k++) {
-    const field = FEATURE_FIELDS[active[k]!.index]!;
-    profile[field] += coefficients[k]! / active[k]!.norm;
+  FEATURE_FIELDS.forEach((field, index) => {
+    profile[field] += coefficients[index] ?? 0;
     if (!Number.isFinite(profile[field]))
       throw new RangeError(
         "tokenx: Overhead calibration produced a nonfinite coefficient.",
       );
-  }
+  });
   const errors = probes.map(
     (probe) =>
       FEATURE_FIELDS.reduce(
@@ -509,4 +457,24 @@ function fitOverhead(
         errors.filter((error) => Math.abs(error) < 1e-7).length / errors.length,
     },
   };
+}
+
+/** Extract the exact same text occurrences that the estimator charges. */
+function extractChargedTexts(
+  inputs: readonly UsageInput[],
+  initial: ResolvedModelProfile,
+): { inputs: UsageInput[]; parts: string[][] } {
+  const compiled = compileProfile(initial);
+  const unique = new Map<string, UsageInput>();
+  const parts = inputs.map((input) => {
+    const occurrences: string[] = [];
+    tallyUsage(input, compiled, {}, (text) => {
+      occurrences.push(text);
+      if (!unique.has(text))
+        unique.set(text, { messages: [{ role: "user", content: text }] });
+      return 0;
+    });
+    return occurrences;
+  });
+  return { inputs: [...unique.values()], parts };
 }

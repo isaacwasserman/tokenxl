@@ -37,16 +37,12 @@ export interface Collected {
   counterCalls: number;
 }
 
-export function throwIfAborted(signal?: AbortSignal): void {
-  signal?.throwIfAborted();
-}
-
 /** Also releases a waiting caller when its counter cannot itself be canceled. */
 function rejectOnAbort<T>(
   value: PromiseLike<T> | T,
   signal?: AbortSignal,
 ): Promise<T> {
-  throwIfAborted(signal);
+  signal?.throwIfAborted();
   if (!signal) return Promise.resolve(value);
   return new Promise((resolve, reject) => {
     const aborted = (): void => reject(signal.reason);
@@ -65,7 +61,7 @@ function rejectOnAbort<T>(
 }
 
 /** Plain text shares controls by content; structured controls share their object. */
-export function getRequestKey(input: UsageInput): UsageInput | string {
+function getRequestKey(input: UsageInput): UsageInput | string {
   const message = input.messages[0];
   return input.messages.length === 1 &&
     message?.role === "user" &&
@@ -101,7 +97,7 @@ export async function collectSamples(
   const indices = new Map<UsageInput | string, number>();
   const inputIndices: number[] = [];
   for (const input of inputs) {
-    throwIfAborted(options.signal);
+    options.signal?.throwIfAborted();
     const identity = getRequestKey(input);
     if (!unique.has(identity)) {
       indices.set(identity, unique.size);
@@ -111,78 +107,89 @@ export async function collectSamples(
   }
   const requests = [...unique.entries()];
   const samples: Sample[] = Array.from({ length: requests.length });
-  let next = 0;
   let completed = 0;
   let counterCalls = 0;
-  let failed = false;
+  const progress = (): void =>
+    options.onProgress?.({
+      phase: "collect",
+      completed: ++completed,
+      total: requests.length,
+    });
 
-  async function worker(): Promise<void> {
-    try {
-      while (next < requests.length) {
-        throwIfAborted(options.signal);
-        if (failed) return;
-        const index = next++;
-        const [identity, input] = requests[index]!;
-        const observed = options.observations?.get(identity);
-        if (observed) {
-          samples[index] = observed;
-          options.onProgress?.({
-            phase: "collect",
-            completed: ++completed,
-            total: requests.length,
-          });
-          continue;
-        }
-        const text = createHistogram();
-        const tally = tallyUsage(input, compiled, {}, (content) => {
-          let cached = histograms.get(content);
-          if (!cached) {
-            const histogram = buildHistogram(content);
-            cached = {
-              histogram,
-              tokens: estimateHistogramTokens(histogram, initialText),
-            };
-            histograms.set(content, cached);
-          }
-          mergeHistogram(text, cached.histogram);
-          return cached.tokens;
-        });
-        counterCalls++;
-        const start = performance.now();
-        const result = await rejectOnAbort(
-          Promise.resolve().then(() => options.countTokens(input)),
-          options.signal,
-        );
-        const actual = typeof result === "number" ? result : result?.count;
-        options.onCall?.({
-          start,
-          end: performance.now(),
-          ...(typeof result === "object" && result?.usage
-            ? { usage: result.usage }
-            : {}),
-        });
-        assertValidCount(actual);
-        throwIfAborted(options.signal);
-        if (failed) return;
-        samples[index] = { tally, text, actual };
-        options.observations?.set(identity, samples[index]!);
-        options.onProgress?.({
-          phase: "collect",
-          completed: ++completed,
-          total: requests.length,
-        });
+  await mapConcurrent(
+    requests,
+    options.concurrency ?? 4,
+    options.signal,
+    async ([identity, input], index) => {
+      const observed = options.observations?.get(identity);
+      if (observed) {
+        samples[index] = observed;
+        progress();
+        return;
       }
-    } catch (error) {
-      failed = true;
-      throw error;
-    }
-  }
-
-  await Promise.all(
-    Array.from(
-      { length: Math.min(options.concurrency ?? 4, requests.length) },
-      () => worker(),
-    ),
+      const text = createHistogram();
+      const tally = tallyUsage(input, compiled, {}, (content) => {
+        let cached = histograms.get(content);
+        if (!cached) {
+          const histogram = buildHistogram(content);
+          cached = {
+            histogram,
+            tokens: estimateHistogramTokens(histogram, initialText),
+          };
+          histograms.set(content, cached);
+        }
+        mergeHistogram(text, cached.histogram);
+        return cached.tokens;
+      });
+      counterCalls++;
+      const start = performance.now();
+      const result = await rejectOnAbort(
+        Promise.resolve().then(() => options.countTokens(input)),
+        options.signal,
+      );
+      const actual = typeof result === "number" ? result : result?.count;
+      options.onCall?.({
+        start,
+        end: performance.now(),
+        ...(typeof result === "object" && result?.usage
+          ? { usage: result.usage }
+          : {}),
+      });
+      assertValidCount(actual);
+      options.signal?.throwIfAborted();
+      samples[index] = { tally, text, actual };
+      options.observations?.set(identity, samples[index]!);
+      progress();
+    },
   );
   return { samples, inputIndices, counterCalls };
+}
+
+/**
+ * Runs `run` on each item, at most `limit` at a time. The first error stops
+ * scheduling new items and rejects; an abort rejects before the next item.
+ */
+export async function mapConcurrent<T>(
+  items: readonly T[],
+  limit: number,
+  signal: AbortSignal | undefined,
+  run: (item: T, index: number) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  let failed = false;
+  async function worker(): Promise<void> {
+    while (next < items.length && !failed) {
+      signal?.throwIfAborted();
+      const index = next++;
+      try {
+        await run(items[index]!, index);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, worker),
+  );
 }

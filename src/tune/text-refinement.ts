@@ -1,7 +1,7 @@
 import type { ResolvedModelProfile } from "../profile.ts";
 import { Feature, TALLY_LENGTH } from "../profile.ts";
 import type { Sample } from "./collect.ts";
-import { throwIfAborted } from "./collect.ts";
+
 import { fitTextRules, measureErrors, reportTextFields } from "./fit.ts";
 import type { TextCompositionReport, TuneOptions } from "./types.ts";
 
@@ -46,7 +46,7 @@ export async function refineTextRules(
   let selected: TextCompositionReport["selected"] = 0;
   const rounds = 4;
   for (let round = 1; round <= rounds; round++) {
-    throwIfAborted(options.signal);
+    options.signal?.throwIfAborted();
     current = fitTextRules(train, current, calibrated, options);
     const loss = measureErrors(judged, current).loss;
     if (loss < bestLoss - 1e-12) {

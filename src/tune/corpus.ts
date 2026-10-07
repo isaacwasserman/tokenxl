@@ -35,7 +35,7 @@ const SEARCH_TOOLS = {
 } as unknown as ToolSet;
 
 /** The same text as a plain request, with a system prompt and tools, and in a tool exchange. */
-export function createRequestVariants(text: string): UsageInput[] {
+function createRequestVariants(text: string): UsageInput[] {
   return [
     { messages: [{ role: "user", content: text }] },
     {

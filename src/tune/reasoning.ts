@@ -4,9 +4,8 @@ import { compileProfile, Feature } from "../profile.ts";
 import { carriesReasoningPayload } from "../usage/messages.ts";
 import type { UsageInput } from "../usage/types.ts";
 import type { CollectionOptions, Sample } from "./collect.ts";
-import { collectSamples, throwIfAborted } from "./collect.ts";
-import { measureErrors } from "./fit.ts";
-import { summarizeErrors } from "./metrics.ts";
+import { collectSamples, mapConcurrent } from "./collect.ts";
+import { measureErrors, solveLeastSquares, summarizeErrors } from "./fit.ts";
 import type {
   ErrorMetrics,
   FieldReport,
@@ -110,94 +109,81 @@ export async function generateHistories(
       histories: [],
     })),
   ];
-  let next = 0;
   let invocations = 0;
-  let failed = false;
-  async function worker(): Promise<void> {
-    try {
-      while (next < conversations.length) {
-        if (failed) return;
-        const task = conversations[next++]!;
-        let history: UsageInput = {
-          messages: [{ role: "user", content: task.prompt }],
-          ...(task.tools ? { tools: task.tools } : {}),
-        };
-        for (let turn = 0; turn < task.responses; turn++) {
-          throwIfAborted(options.signal);
-          invocations++;
-          const start = performance.now();
-          const result = await invokeModel(history, { signal: options.signal });
-          const response =
-            result === null || Array.isArray(result)
-              ? (result as readonly ModelMessage[] | null)
-              : (result as { messages: readonly ModelMessage[] | null })
-                  .messages;
-          const usage =
-            result && !Array.isArray(result)
-              ? (result as { usage?: TokenUsage }).usage
-              : undefined;
-          options.onCall?.({
-            start,
-            end: performance.now(),
-            ...(usage ? { usage } : {}),
-          });
-          throwIfAborted(options.signal);
-          options.onProgress?.();
-          if (failed || !response?.length) break;
-          const calls = response.flatMap((message) =>
-            message.role === "assistant" && Array.isArray(message.content)
-              ? message.content.filter((part) => part.type === "tool-call")
-              : [],
-          );
-          if (calls.length) {
-            // Answer every call; the history ends in the current turn.
-            const results: ModelMessage = {
-              role: "tool",
-              content: calls.map((call) => ({
-                type: "tool-result",
-                toolCallId: call.toolCallId,
-                toolName: call.toolName,
-                output: {
-                  type: "json",
-                  value: (TOOL_RESULTS[call.toolName] ?? {
-                    error: "unknown tool",
-                  }) as never,
-                },
-              })),
-            };
-            history = {
-              ...history,
-              messages: [...history.messages, ...response, results],
-            };
-            task.histories.push(history);
-            continue;
-          }
+  await mapConcurrent(
+    conversations,
+    options.concurrency ?? 4,
+    options.signal,
+    async (task) => {
+      let history: UsageInput = {
+        messages: [{ role: "user", content: task.prompt }],
+        ...(task.tools ? { tools: task.tools } : {}),
+      };
+      for (let turn = 0; turn < task.responses; turn++) {
+        options.signal?.throwIfAborted();
+        invocations++;
+        const start = performance.now();
+        const result = await invokeModel(history, { signal: options.signal });
+        const response =
+          result === null || Array.isArray(result)
+            ? (result as readonly ModelMessage[] | null)
+            : (result as { messages: readonly ModelMessage[] | null }).messages;
+        const usage =
+          result && !Array.isArray(result)
+            ? (result as { usage?: TokenUsage }).usage
+            : undefined;
+        options.onCall?.({
+          start,
+          end: performance.now(),
+          ...(usage ? { usage } : {}),
+        });
+        options.signal?.throwIfAborted();
+        options.onProgress?.();
+        if (!response?.length) break;
+        const calls = response.flatMap((message) =>
+          message.role === "assistant" && Array.isArray(message.content)
+            ? message.content.filter((part) => part.type === "tool-call")
+            : [],
+        );
+        if (calls.length) {
+          // Answer every call; the history ends in the current turn.
+          const results: ModelMessage = {
+            role: "tool",
+            content: calls.map((call) => ({
+              type: "tool-result",
+              toolCallId: call.toolCallId,
+              toolName: call.toolName,
+              output: {
+                type: "json",
+                value: (TOOL_RESULTS[call.toolName] ?? {
+                  error: "unknown tool",
+                }) as never,
+              },
+            })),
+          };
           history = {
             ...history,
-            messages: [
-              ...history.messages,
-              ...response,
-              {
-                role: "user",
-                content:
-                  turn + 1 < task.responses && !task.tools ? CHALLENGE : CLOSE,
-              },
-            ],
+            messages: [...history.messages, ...response, results],
           };
           task.histories.push(history);
-          if (task.tools) break;
+          continue;
         }
+        history = {
+          ...history,
+          messages: [
+            ...history.messages,
+            ...response,
+            {
+              role: "user",
+              content:
+                turn + 1 < task.responses && !task.tools ? CHALLENGE : CLOSE,
+            },
+          ],
+        };
+        task.histories.push(history);
+        if (task.tools) break;
       }
-    } catch (error) {
-      failed = true;
-      throw error;
-    }
-  }
-  await Promise.all(
-    Array.from(
-      { length: Math.min(options.concurrency ?? 4, conversations.length) },
-      () => worker(),
-    ),
+    },
   );
   return {
     histories: conversations.flatMap((task) => task.histories),
@@ -205,7 +191,7 @@ export async function generateHistories(
   };
 }
 
-export interface ReasoningFit {
+interface ReasoningFit {
   profile: ResolvedModelProfile;
   /** Why the costs kept their initial values, if they did. */
   reason?: FieldReport["reason"];
@@ -259,8 +245,7 @@ export async function fitReasoning(
       [false, currentOnly],
     ] as const
   ).flatMap(([previousTurns, data]) => {
-    const solution =
-      counted(data) >= 2 ? solveWeightedLeastSquares(data, [0, 1]) : undefined;
+    const solution = counted(data) >= 2 ? solveWeighted(data) : undefined;
     if (!solution || !Number.isFinite(solution[0]) || !(solution[1]! > -1e-9))
       return [];
     const [block, char] = [solution[0]!, Math.max(0, solution[1]!)];
@@ -284,7 +269,7 @@ export async function fitReasoning(
     ? undefined
     : counted(merged) < 2
       ? "absent"
-      : solveWeightedLeastSquares(merged, [0, 1])
+      : solveWeighted(merged)
         ? "invalid"
         : "collinear";
   const profile: ResolvedModelProfile = best
@@ -307,39 +292,15 @@ export async function fitReasoning(
   };
 }
 
-/** Weighted least squares on the given columns; `undefined` when they are not independent. */
-function solveWeightedLeastSquares(
+/** Weighted least squares on both columns; `undefined` when they are not independent. */
+function solveWeighted(
   rows: { x: number[]; target: number; weight: number }[],
-  columns: number[],
 ): number[] | undefined {
-  const n = columns.length;
-  if (!n) return [];
-  const a = Array.from({ length: n }, () =>
-    Array.from<number>({ length: n + 1 }).fill(0),
+  const { coefficients, reasons } = solveLeastSquares(
+    rows.map((row) => row.x.map((value) => value * Math.sqrt(row.weight))),
+    rows.map((row) => row.target * Math.sqrt(row.weight)),
   );
-  for (const row of rows) {
-    for (let i = 0; i < n; i++) {
-      for (let j = 0; j < n; j++)
-        a[i]![j]! += row.weight * row.x[columns[i]!]! * row.x[columns[j]!]!;
-      a[i]![n]! += row.weight * row.x[columns[i]!]! * row.target;
-    }
-  }
-  const scale = a.map((row, i) => Math.sqrt(row[i]!));
-  for (let i = 0; i < n; i++) {
-    let pivot = i;
-    for (let r = i + 1; r < n; r++) {
-      if (Math.abs(a[r]![i]!) > Math.abs(a[pivot]![i]!)) pivot = r;
-    }
-    [a[i], a[pivot]] = [a[pivot]!, a[i]!];
-    // Relative to the column norms, a tiny pivot means dependent columns.
-    if (Math.abs(a[i]![i]!) <= 1e-10 * scale[i]! * scale[i]!) return;
-    for (let r = 0; r < n; r++) {
-      if (r === i) continue;
-      const factor = a[r]![i]! / a[i]![i]!;
-      for (let c = i; c <= n; c++) a[r]![c]! -= factor * a[i]![c]!;
-    }
-  }
-  return a.map((row, i) => row[n]! / row[i]!);
+  return reasons.size ? undefined : (coefficients as number[]);
 }
 
 // The same control object lets shared observations reuse counts across fits.

@@ -11,7 +11,7 @@ import {
 } from "../segments.ts";
 import type { LanguageId, TextProfile } from "../types.ts";
 
-export const TEXT_FIELDS = TEXT_PROFILE_FIELDS.filter(
+const TEXT_FIELDS = TEXT_PROFILE_FIELDS.filter(
   (field) => field !== "languageCharsPerToken",
 ) as readonly Exclude<keyof ResolvedTextProfile, "languageCharsPerToken">[];
 
