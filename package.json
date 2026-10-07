@@ -30,6 +30,14 @@
     ".": {
       "types": "./dist/index.d.mts",
       "default": "./dist/index.mjs"
+    },
+    "./tune": {
+      "types": "./dist/tune.d.mts",
+      "default": "./dist/tune.mjs"
+    },
+    "./provider-adapters": {
+      "types": "./dist/provider-adapters.d.mts",
+      "default": "./dist/provider-adapters.mjs"
     }
   },
   "types": "./dist/index.d.mts",
@@ -37,39 +45,40 @@
     "tokenx": "bin/tokenx.mjs"
   },
   "files": [
+    "NOTICE",
     "bin",
     "dist"
   ],
   "scripts": {
     "build": "tsdown",
     "dev": "node ./src/cli/entry.ts --help",
-    "bench": "node scripts/generate-bench.ts && automd",
-    "bench:png": "node scripts/render-bench.ts",
-    "lint": "eslint .",
-    "lint:fix": "eslint . --fix",
+    "benchmark": "node scripts/benchmark.ts",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
     "test": "vitest",
-    "test:types": "tsc --noEmit",
-    "release": "bumpp",
-    "bench:speed": "vitest bench --run bench/"
+    "typecheck": "tsc --noEmit",
+    "tune": "node --env-file-if-exists=.env scripts/tune.ts",
+    "release": "bumpp"
   },
   "peerDependencies": {
+    "@openrouter/ai-sdk-provider": "^3.1.0",
     "ai": "^5.0.0 || ^6.0.0 || ^7.0.0"
   },
   "peerDependenciesMeta": {
+    "@openrouter/ai-sdk-provider": {
+      "optional": true
+    },
     "ai": {
       "optional": true
     }
   },
   "devDependencies": {
-    "@antfu/eslint-config": "^9.2.0",
+    "@biomejs/biome": "2.5.15",
+    "@openrouter/ai-sdk-provider": "^3.1.0",
     "@types/node": "^26.1.2",
     "ai": "^7.0.126",
     "ai-tokenizer": "^1.0.7",
-    "ansis": "^4.3.1",
-    "automd": "^0.4.3",
     "bumpp": "^12.1.1",
-    "eslint": "^10.8.0",
-    "eslint-flat-config-utils": "^3.2.0",
     "gpt-tokenizer": "^3.4.0",
     "tsdown": "^0.22.14",
     "typescript": "^6.0.3",

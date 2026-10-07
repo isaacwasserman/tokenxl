@@ -1,0 +1,357 @@
+import type { SegmentEstimate } from './segments.ts'
+import type { SplitByTokensOptions, TokenEstimationOptions } from './types.ts'
+import { walkSegments } from './segments.ts'
+
+export * from './types.ts'
+
+export function isWithinTokenLimit(
+  text: string,
+  tokenLimit: number,
+  options?: TokenEstimationOptions,
+): boolean {
+  return estimateTokenCount(text, options) <= tokenLimit
+}
+
+/** Estimates the number of tokens in a text string using heuristic rules. */
+export function estimateTokenCount(text?: string, options: TokenEstimationOptions = {}): number {
+  if (!text)
+    return 0
+
+  let tokenCount = 0
+  for (const segmentEstimate of walkSegments(text, options)) {
+    tokenCount += segmentEstimate.tokenCount
+  }
+
+  return tokenCount
+}
+
+/** Extracts a portion of text based on token positions, similar to `Array.prototype.slice()`. */
+export function sliceByTokens(
+  text: string,
+  start: number = 0,
+  end?: number,
+  options: TokenEstimationOptions = {},
+): string {
+  if (!text)
+    return ''
+
+  // Negative indices resolve against the total count, which is only known
+  // after a full walk – buffer it instead of walking twice.
+  let segmentEstimates: Iterable<SegmentEstimate> = walkSegments(text, options)
+  let totalTokens = 0
+  if (start < 0 || (end !== undefined && end < 0)) {
+    const bufferedEstimates = Array.from(segmentEstimates)
+    for (const { tokenCount } of bufferedEstimates) {
+      totalTokens += tokenCount
+    }
+    segmentEstimates = bufferedEstimates
+  }
+
+  const normalizedStart = start < 0 ? Math.max(0, totalTokens + start) : Math.max(0, start)
+  const normalizedEnd = end === undefined
+    ? Infinity
+    : end < 0
+      ? Math.max(0, totalTokens + end)
+      : end
+
+  if (normalizedStart >= normalizedEnd)
+    return ''
+
+  const parts: string[] = []
+  let currentTokenPos = 0
+
+  for (const { segment, tokenCount } of segmentEstimates) {
+    if (currentTokenPos >= normalizedEnd)
+      break
+
+    const extracted = extractSegmentPart(segment, currentTokenPos, tokenCount, normalizedStart, normalizedEnd)
+    if (extracted)
+      parts.push(extracted)
+    currentTokenPos += tokenCount
+  }
+
+  return parts.join('')
+}
+
+export function splitByTokens(
+  text: string,
+  tokensPerChunk: number,
+  options: SplitByTokensOptions = {},
+): string[] {
+  if (!text || tokensPerChunk <= 0)
+    return []
+
+  // An overlap of at least the chunk size would prevent chunks from ever
+  // draining, duplicating content without bound.
+  const overlap = Math.max(0, Math.min(options.overlap ?? 0, tokensPerChunk - 1))
+
+  const chunks: string[] = []
+  let currentChunk: SegmentEstimate[] = []
+  let currentTokenCount = 0
+  // Overlap segments alone don't justify a trailing chunk – it would only
+  // duplicate the end of the previous chunk.
+  let hasUnchunkedSegments = false
+
+  for (const segmentEstimate of walkSegments(text, options)) {
+    currentChunk.push(segmentEstimate)
+    currentTokenCount += segmentEstimate.tokenCount
+    hasUnchunkedSegments = true
+
+    if (currentTokenCount >= tokensPerChunk) {
+      chunks.push(joinSegments(currentChunk))
+      hasUnchunkedSegments = false
+
+      if (overlap > 0) {
+        const overlapSegments: SegmentEstimate[] = []
+        let overlapTokenCount = 0
+
+        for (let i = currentChunk.length - 1; i >= 0 && overlapTokenCount < overlap; i--) {
+          const overlapCandidate = currentChunk[i]!
+          overlapSegments.unshift(overlapCandidate)
+          overlapTokenCount += overlapCandidate.tokenCount
+        }
+
+        currentChunk = overlapSegments
+        currentTokenCount = overlapTokenCount
+      }
+      else {
+        currentChunk = []
+        currentTokenCount = 0
+      }
+    }
+  }
+
+  if (currentChunk.length > 0 && hasUnchunkedSegments)
+    chunks.push(joinSegments(currentChunk))
+
+  return chunks
+}
+
+function joinSegments(segmentEstimates: SegmentEstimate[]): string {
+  let joined = ''
+  for (const { segment } of segmentEstimates) {
+    joined += segment
+  }
+  return joined
+}
+
+function extractSegmentPart(
+  segment: string,
+  segmentTokenStart: number,
+  segmentTokenCount: number,
+  targetStart: number,
+  targetEnd: number,
+): string {
+  if (segmentTokenCount === 0) {
+    return segmentTokenStart >= targetStart && segmentTokenStart < targetEnd ? segment : ''
+  }
+
+  const segmentTokenEnd = segmentTokenStart + segmentTokenCount
+  if (segmentTokenStart >= targetEnd || segmentTokenEnd <= targetStart)
+    return ''
+
+  const overlapStart = Math.max(0, targetStart - segmentTokenStart)
+  const overlapEnd = Math.min(segmentTokenCount, targetEnd - segmentTokenStart)
+
+  if (overlapStart === 0 && overlapEnd === segmentTokenCount)
+    return segment
+
+  const charStart = Math.floor((overlapStart / segmentTokenCount) * segment.length)
+  const charEnd = Math.ceil((overlapEnd / segmentTokenCount) * segment.length)
+  return segment.slice(charStart, charEnd)
+}
+import type { LanguageConfig, TokenEstimationOptions } from './types.ts'
+
+const PATTERNS = {
+  whitespace: /^\s+$/,
+  structuredWhitespace: /\n\s/,
+  nonAscii: /[\u0080-\uFFFF]/,
+  cjk: /[\u4E00-\u9FFF\u3400-\u4DBF\u3000-\u30FF\uFF00-\uFFEF\u2E80-\u2EFF\u31C0-\u31EF\u3200-\u32FF\u3300-\u33FF\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF]/,
+  numeric: /^\d+$/,
+  punctuation: /[.,!?;(){}[\]<>:/\\|@#$%^&*+=`~_"-]/,
+  lowercaseWord: /^[a-z]+$/,
+} as const
+
+const TOKEN_SPLIT_PATTERN = new RegExp(`(\\s+|${PATTERNS.punctuation.source}+)`)
+
+// All ratios are calibrated against OpenAI's o200k_base encoding.
+const DEFAULT_CHARS_PER_TOKEN = 7
+const SHORT_TOKEN_THRESHOLD = 3
+const LOWERCASE_WORD_SINGLE_TOKEN_LENGTH = 8
+const PUNCTUATION_CHARS_PER_TOKEN = 6
+const KANA_CHARS_PER_TOKEN = 1.4
+const HANGUL_CHARS_PER_TOKEN = 1.65
+const HANZI_CHARS_PER_TOKEN = 1.15
+
+const DEFAULT_LANGUAGE_CONFIGS: LanguageConfig[] = [
+  // An accent rule prices a whole language through the minority of its words
+  // that carry an accent, so each ratio is fitted against running text in that
+  // language rather than against the segments the pattern matches.
+  { pattern: /[äöüßẞ]/i, averageCharsPerToken: 3 },
+  { pattern: /[éèêëàâîïôûùüÿçœæáíóúñ]/i, averageCharsPerToken: 4.5 },
+  // Set below what the accented segments alone would fit: unaccented Slavic
+  // words fall through to the default ratio, and this compensates the shortfall.
+  { pattern: /[ąćęłńóśźżěščřžýůúďťň]/i, averageCharsPerToken: 2.5 },
+  { pattern: /[\u0430-\u044F\u0451]/i, averageCharsPerToken: 6 },
+  { pattern: /[\u03AC-\u03CE]/i, averageCharsPerToken: 3 },
+  // Anchored to pure emoji runs – symbols like ™ are Extended_Pictographic
+  // too, and an unanchored match would misprice the whole attached word.
+  { pattern: /^\p{Extended_Pictographic}[\p{Extended_Pictographic}\p{Emoji_Component}]*$/u, averageCharsPerToken: 0.9 },
+]
+
+export interface SegmentEstimate {
+  segment: string
+  tokenCount: number
+}
+
+/**
+ * Walks a text as (segment, estimated token count) pairs. The segments
+ * concatenate back to the original text; whitespace segments count zero
+ * tokens unless they carry structure (indentation or blank lines).
+ */
+export function* walkSegments(text: string, options: TokenEstimationOptions = {}): Generator<SegmentEstimate> {
+  if (!text)
+    return
+
+  const resolvedOptions = resolveOptions(options)
+
+  let previousSegment = ''
+
+  for (const segment of text.split(TOKEN_SPLIT_PATTERN)) {
+    if (segment) {
+      yield { segment, tokenCount: estimateSegmentTokens(segment, resolvedOptions, previousSegment) }
+      previousSegment = segment
+    }
+  }
+}
+
+interface ResolvedTokenEstimationOptions {
+  defaultCharsPerToken: number
+  languageConfigs: LanguageConfig[]
+}
+
+function resolveOptions(options: TokenEstimationOptions): ResolvedTokenEstimationOptions {
+  return {
+    defaultCharsPerToken: options.defaultCharsPerToken ?? DEFAULT_CHARS_PER_TOKEN,
+    languageConfigs: options.languageConfigs ?? DEFAULT_LANGUAGE_CONFIGS,
+  }
+}
+
+function estimateSegmentTokens(
+  segment: string,
+  { languageConfigs, defaultCharsPerToken }: ResolvedTokenEstimationOptions,
+  previousSegment: string,
+): number {
+  if (PATTERNS.whitespace.test(segment)) {
+    // Indentation and blank lines cost a token in o200k.
+    if (PATTERNS.structuredWhitespace.test(segment))
+      return 1
+
+    // A line break merges into a preceding punctuation token but stands on
+    // its own after a word. Single spaces always merge.
+    return segment.includes('\n') && !PATTERNS.punctuation.test(previousSegment.slice(-1)) ? 1 : 0
+  }
+
+  // Checked before the built-in rules so custom configs can override them.
+  const languageCharsPerToken = getLanguageSpecificCharsPerToken(segment, languageConfigs)
+  if (languageCharsPerToken !== undefined) {
+    return Math.ceil(getCharacterCount(segment) / languageCharsPerToken)
+  }
+
+  if (PATTERNS.cjk.test(segment)) {
+    return estimateCjkTokens(segment)
+  }
+
+  if (PATTERNS.numeric.test(segment)) {
+    // o200k chunks digit runs into groups of up to three digits.
+    return Math.ceil(segment.length / 3)
+  }
+
+  if (segment.length <= SHORT_TOKEN_THRESHOLD) {
+    return 1
+  }
+
+  // o200k merges common lowercase words of up to eight characters into a
+  // single token. The lowercase gate keeps capitalized compounds and scripts
+  // without a built-in rule at the default ratio.
+  if (segment.length <= LOWERCASE_WORD_SINGLE_TOKEN_LENGTH && PATTERNS.lowercaseWord.test(segment)) {
+    return 1
+  }
+
+  if (PATTERNS.punctuation.test(segment)) {
+    return Math.ceil(segment.length / PUNCTUATION_CHARS_PER_TOKEN)
+  }
+
+  return Math.ceil(segment.length / defaultCharsPerToken)
+}
+
+function getLanguageSpecificCharsPerToken(segment: string, languageConfigs: LanguageConfig[]): number | undefined {
+  // Every built-in config needs a non-ASCII character to match, so ASCII-only
+  // segments skip the loop – custom configs carry no such guarantee, which is
+  // why the shortcut checks for the defaults.
+  if (languageConfigs === DEFAULT_LANGUAGE_CONFIGS && !PATTERNS.nonAscii.test(segment)) {
+    return
+  }
+
+  for (const config of languageConfigs) {
+    // `search` instead of `test`: it ignores `lastIndex`, so stateful flags
+    // (`/g`, `/y`) on user-supplied patterns can't skew matching.
+    if (segment.search(config.pattern) !== -1) {
+      return config.averageCharsPerToken
+    }
+  }
+}
+
+function getCharacterCount(text: string): number {
+  return Array.from(text).length
+}
+
+function estimateCjkTokens(segment: string): number {
+  let kanaCount = 0
+  let hangulCount = 0
+  let hanziCount = 0
+
+  for (const character of segment) {
+    const codePoint = character.codePointAt(0)!
+
+    if (codePoint >= 0x3040 && codePoint <= 0x30FF)
+      kanaCount++
+    else if (isHangulCodePoint(codePoint))
+      hangulCount++
+    else
+      hanziCount++
+  }
+
+  // One rounding for the whole segment: rounding each script on its own would
+  // charge a token for every script boundary in mixed CJK text.
+  return Math.ceil(
+    hanziCount / HANZI_CHARS_PER_TOKEN
+    + kanaCount / KANA_CHARS_PER_TOKEN
+    + hangulCount / HANGUL_CHARS_PER_TOKEN,
+  )
+}
+
+function isHangulCodePoint(codePoint: number): boolean {
+  return (codePoint >= 0xAC00 && codePoint <= 0xD7AF)
+    || (codePoint >= 0x1100 && codePoint <= 0x11FF)
+    || (codePoint >= 0x3130 && codePoint <= 0x318F)
+    || (codePoint >= 0xA960 && codePoint <= 0xA97F)
+    || (codePoint >= 0xD7B0 && codePoint <= 0xD7FF)
+}
+export interface TokenEstimationOptions {
+  /** Default average characters per token when no language-specific rule applies (default: 7). */
+  defaultCharsPerToken?: number
+  /** Custom language configurations to override defaults. */
+  languageConfigs?: LanguageConfig[]
+}
+
+export interface LanguageConfig {
+  /** Regular expression to detect the language. */
+  pattern: RegExp
+  averageCharsPerToken: number
+}
+
+export interface SplitByTokensOptions extends TokenEstimationOptions {
+  /** Number of tokens to overlap between consecutive chunks (default: 0, clamped below the target chunk size). */
+  overlap?: number
+}

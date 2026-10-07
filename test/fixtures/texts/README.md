@@ -19,7 +19,7 @@ Each prose file was cleaned once: source boilerplate and markup removed, hard-wr
 | `great-gatsby-en.txt` | F. Scott Fitzgerald, _The Great Gatsby_ (1925) – opening of chapter I, [Project Gutenberg 64317](https://www.gutenberg.org/ebooks/64317) | Public domain |
 | `die-verwandlung-de.txt` | Franz Kafka, _Die Verwandlung_ (1915) – opening of part I, [Project Gutenberg 22367](https://www.gutenberg.org/ebooks/22367) | Public domain |
 
-The benchmark also measures `src/index.ts`, `src/segments.ts` and `src/types.ts` as a source-code sample, so no file is checked in for that row.
+`tokenx-source.txt` is a frozen copy of `src/index.ts`, `src/segments.ts` and `src/types.ts` from the main branch, so saved provider counts stay valid when the source changes (MIT, this repository).
 
 `../holdout/` holds a separate set of texts that no ratio was ever fitted against – see `test/holdout.test.ts`. They carry their own licences:
 
