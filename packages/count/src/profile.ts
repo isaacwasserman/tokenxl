@@ -8,7 +8,7 @@ import {
   resolveTextProfile,
   resolveTokenEstimationOptions,
 } from "./segments.ts";
-import type { TextProfile } from "./types.ts";
+import type { LanguageConfig, TextProfile } from "./types.ts";
 import type { ImageGeometry } from "./usage/images.ts";
 
 /**
@@ -303,6 +303,7 @@ export interface CompiledProfile {
 export function compileProfile(
   profile?: ModelProfileInput,
   cache = true,
+  languageConfigs?: LanguageConfig[],
 ): CompiledProfile {
   const resolved = resolveProfile(profile);
   const weights = new Float64Array(TALLY_LENGTH);
@@ -328,7 +329,11 @@ export function compileProfile(
   return {
     profile: resolved,
     weights,
-    text: resolveTokenEstimationOptions({ ...resolved.text, cache }),
+    text: resolveTokenEstimationOptions({
+      ...resolved.text,
+      cache,
+      ...(languageConfigs ? { languageConfigs } : {}),
+    }),
     images: {
       imagePatchSize: resolved.imagePatchSize,
       imageMaxEdge: resolved.imageMaxEdge,

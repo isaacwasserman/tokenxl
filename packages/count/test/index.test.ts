@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  estimateTokenCount,
-  isWithinTokenLimit,
-  sliceByTokens,
-  splitByTokens,
-} from "../src/index";
+import { countText, fitsText, sliceText, splitText } from "./fixtures/text.ts";
 
 /**
  * Pins the slice snapshots below to a ratio of the test's own choosing, so
@@ -20,76 +15,64 @@ const MULTI_TOKEN_WORDS =
 
 describe("estimateTokenCount", () => {
   it("returns zero for empty input", () => {
-    expect(estimateTokenCount("")).toBe(0);
-    expect(estimateTokenCount()).toBe(0);
+    expect(countText("")).toBe(0);
+    expect(countText()).toBe(0);
   });
 
   describe("pricing rules", () => {
     it("prices kana runs below one token per character", () => {
       const kana = "こんにちはみなさん";
-      expect(estimateTokenCount(kana)).toBeLessThan(kana.length);
+      expect(countText(kana)).toBeLessThan(kana.length);
     });
 
     it("prices han characters below one token each", () => {
       const han = "人工智能技术发展迅速";
-      expect(estimateTokenCount(han)).toBeLessThan(han.length);
+      expect(countText(han)).toBeLessThan(han.length);
     });
 
     it("prices hangul below one token each", () => {
       const hangul = "안녕하세요반갑습니다";
-      expect(estimateTokenCount(hangul)).toBeLessThan(hangul.length);
+      expect(countText(hangul)).toBeLessThan(hangul.length);
     });
 
     it("prices digit runs in groups of three", () => {
-      expect(estimateTokenCount("123")).toBe(1);
-      expect(estimateTokenCount("1234567890")).toBe(4);
+      expect(countText("123")).toBe(1);
+      expect(countText("1234567890")).toBe(4);
     });
 
     it("prices emoji above one token per character", () => {
       const emoji = "🏀🔥";
-      expect(estimateTokenCount(emoji)).toBeGreaterThan(
-        Array.from(emoji).length,
-      );
+      expect(countText(emoji)).toBeGreaterThan(Array.from(emoji).length);
     });
 
     it("prices words with an attached pictographic symbol like plain words", () => {
-      expect(estimateTokenCount("Gutenberg™")).toBe(
-        estimateTokenCount("Gutenbergs"),
-      );
+      expect(countText("Gutenberg™")).toBe(countText("Gutenbergs"));
     });
 
     it("prices URLs well below one token per character", () => {
       const url = "https://example.com/path/to/resource";
-      expect(estimateTokenCount(url)).toBeLessThan(url.length / 2);
+      expect(countText(url)).toBeLessThan(url.length / 2);
     });
 
     it("prices indentation and blank lines as one token", () => {
-      expect(estimateTokenCount("Hello\n  world")).toBe(
-        estimateTokenCount("Hello world") + 1,
-      );
-      expect(estimateTokenCount("Hello\n\nworld")).toBe(
-        estimateTokenCount("Hello world") + 1,
-      );
+      expect(countText("Hello\n  world")).toBe(countText("Hello world") + 1);
+      expect(countText("Hello\n\nworld")).toBe(countText("Hello world") + 1);
     });
 
     it("charges a line break that follows a word", () => {
-      expect(estimateTokenCount("Hello\nworld")).toBe(
-        estimateTokenCount("Hello world") + 1,
-      );
+      expect(countText("Hello\nworld")).toBe(countText("Hello world") + 1);
     });
 
     it("merges a line break into a preceding punctuation token", () => {
-      expect(estimateTokenCount("Hello,\nworld")).toBe(
-        estimateTokenCount("Hello, world"),
-      );
+      expect(countText("Hello,\nworld")).toBe(countText("Hello, world"));
     });
   });
 
   describe("options", () => {
     it("returns more tokens for a lower defaultCharsPerToken", () => {
       const input = "Hello world";
-      const defaultCount = estimateTokenCount(input);
-      const customCount = estimateTokenCount(input, {
+      const defaultCount = countText(input);
+      const customCount = countText(input, {
         defaultCharsPerToken: 4,
       });
 
@@ -104,10 +87,8 @@ describe("estimateTokenCount", () => {
         ],
       };
 
-      expect(estimateTokenCount(input, customOptions)).toBe(4);
-      expect(estimateTokenCount(input, customOptions)).not.toBe(
-        estimateTokenCount(input),
-      );
+      expect(countText(input, customOptions)).toBe(4);
+      expect(countText(input, customOptions)).not.toBe(countText(input));
     });
 
     it("ignores stateful regex flags in language configs", () => {
@@ -119,8 +100,8 @@ describe("estimateTokenCount", () => {
         languageConfigs: [{ pattern: /[éè]/, averageCharsPerToken: 3 }],
       };
 
-      expect(estimateTokenCount(input, statefulOptions)).toBe(
-        estimateTokenCount(input, statelessOptions),
+      expect(countText(input, statefulOptions)).toBe(
+        countText(input, statelessOptions),
       );
     });
 
@@ -130,55 +111,43 @@ describe("estimateTokenCount", () => {
         languageConfigs: [{ pattern: /[aeiou]/, averageCharsPerToken: 2 }],
       };
 
-      expect(estimateTokenCount(input, asciiOptions)).toBeGreaterThan(
-        estimateTokenCount(input),
-      );
+      expect(countText(input, asciiOptions)).toBeGreaterThan(countText(input));
     });
 
     it("applies each text rule ratio", () => {
-      expect(estimateTokenCount("------------")).toBe(2);
-      expect(
-        estimateTokenCount("------------", { punctuationCharsPerToken: 2 }),
-      ).toBe(6);
-
-      expect(estimateTokenCount("123456789")).toBe(3);
-      expect(estimateTokenCount("123456789", { digitsPerToken: 9 })).toBe(1);
-
-      expect(estimateTokenCount("ABCDEFGHIJ")).toBe(2);
-      expect(
-        estimateTokenCount("ABCDEFGHIJ", { shortTokenThreshold: 10 }),
-      ).toBe(1);
-
-      expect(estimateTokenCount("abcdefghijkl")).toBe(2);
-      expect(
-        estimateTokenCount("abcdefghijkl", { lowercaseWordMaxLength: 12 }),
-      ).toBe(1);
-
-      expect(estimateTokenCount("人工智能技术")).toBe(6);
-      expect(
-        estimateTokenCount("人工智能技术", { hanziCharsPerToken: 3 }),
-      ).toBe(2);
-
-      expect(estimateTokenCount("こんにちは")).toBe(4);
-      expect(estimateTokenCount("こんにちは", { kanaCharsPerToken: 5 })).toBe(
-        1,
+      expect(countText("------------")).toBe(2);
+      expect(countText("------------", { punctuationCharsPerToken: 2 })).toBe(
+        6,
       );
 
-      expect(estimateTokenCount("안녕하세요")).toBe(4);
-      expect(estimateTokenCount("안녕하세요", { hangulCharsPerToken: 5 })).toBe(
-        1,
-      );
+      expect(countText("123456789")).toBe(3);
+      expect(countText("123456789", { digitsPerToken: 9 })).toBe(1);
+
+      expect(countText("ABCDEFGHIJ")).toBe(2);
+      expect(countText("ABCDEFGHIJ", { shortTokenThreshold: 10 })).toBe(1);
+
+      expect(countText("abcdefghijkl")).toBe(2);
+      expect(countText("abcdefghijkl", { lowercaseWordMaxLength: 12 })).toBe(1);
+
+      expect(countText("人工智能技术")).toBe(6);
+      expect(countText("人工智能技术", { hanziCharsPerToken: 3 })).toBe(2);
+
+      expect(countText("こんにちは")).toBe(4);
+      expect(countText("こんにちは", { kanaCharsPerToken: 5 })).toBe(1);
+
+      expect(countText("안녕하세요")).toBe(4);
+      expect(countText("안녕하세요", { hangulCharsPerToken: 5 })).toBe(1);
     });
 
     it("overrides the ratio of a built-in language config by name", () => {
-      expect(estimateTokenCount("Größenordnung")).toBe(5);
+      expect(countText("Größenordnung")).toBe(5);
       expect(
-        estimateTokenCount("Größenordnung", {
+        countText("Größenordnung", {
           languageCharsPerToken: { german: 13 },
         }),
       ).toBe(1);
       expect(
-        estimateTokenCount("Größenordnung", {
+        countText("Größenordnung", {
           languageCharsPerToken: { cyrillic: 1 },
         }),
       ).toBe(5);
@@ -187,42 +156,42 @@ describe("estimateTokenCount", () => {
     it("ignores language ratio overrides when custom language configs are set", () => {
       const input = "Größenordnung";
       expect(
-        estimateTokenCount(input, {
+        countText(input, {
           languageConfigs: [],
           languageCharsPerToken: { german: 13 },
         }),
-      ).toBe(estimateTokenCount(input, { languageConfigs: [] }));
+      ).toBe(countText(input, { languageConfigs: [] }));
     });
 
     it("treats undefined options as the defaults", () => {
       const input = "Die Größenordnung of 12345 tokens – 人工智能.";
       expect(
-        estimateTokenCount(input, {
+        countText(input, {
           defaultCharsPerToken: undefined,
           languageConfigs: undefined,
         }),
-      ).toBe(estimateTokenCount(input));
+      ).toBe(countText(input));
     });
   });
 });
 
 describe("isWithinTokenLimit", () => {
   it("returns true when the input is within the token limit", () => {
-    expect(isWithinTokenLimit("Short input.", 10)).toBe(true);
+    expect(fitsText("Short input.", 10)).toBe(true);
   });
 
   it("returns false when the input exceeds the token limit", () => {
     const input =
       "This is a much longer input that should exceed the token limit set for this test case.";
-    expect(isWithinTokenLimit(input, 10)).toBe(false);
+    expect(fitsText(input, 10)).toBe(false);
   });
 
   it("treats the limit as inclusive", () => {
     const input = "Boundary check input";
-    const exactLimit = estimateTokenCount(input);
+    const exactLimit = countText(input);
 
-    expect(isWithinTokenLimit(input, exactLimit)).toBe(true);
-    expect(isWithinTokenLimit(input, exactLimit - 1)).toBe(false);
+    expect(fitsText(input, exactLimit)).toBe(true);
+    expect(fitsText(input, exactLimit - 1)).toBe(false);
   });
 
   it("flips the verdict under stricter custom options", () => {
@@ -230,29 +199,24 @@ describe("isWithinTokenLimit", () => {
     const tokenLimit = 3;
     const customOptions = { defaultCharsPerToken: 2 };
 
-    expect(isWithinTokenLimit(input, tokenLimit)).toBe(true);
-    expect(isWithinTokenLimit(input, tokenLimit, customOptions)).toBe(false);
+    expect(fitsText(input, tokenLimit)).toBe(true);
+    expect(fitsText(input, tokenLimit, customOptions)).toBe(false);
   });
 });
 
 describe("sliceByTokens", () => {
   it("returns an empty string for empty input", () => {
-    expect(sliceByTokens("")).toBe("");
-    expect(sliceByTokens("", 0, 5)).toBe("");
+    expect(sliceText("")).toBe("");
+    expect(sliceText("", 0, 5)).toBe("");
   });
 
   it("returns the entire text when no bounds are given", () => {
-    expect(sliceByTokens(SINGLE_TOKEN_WORDS)).toBe(SINGLE_TOKEN_WORDS);
+    expect(sliceText(SINGLE_TOKEN_WORDS)).toBe(SINGLE_TOKEN_WORDS);
   });
 
   it("reconstructs the input from adjacent slices", () => {
-    const firstTwoTokens = sliceByTokens(
-      SINGLE_TOKEN_WORDS,
-      0,
-      2,
-      FIXED_OPTIONS,
-    );
-    const fromThirdToken = sliceByTokens(
+    const firstTwoTokens = sliceText(SINGLE_TOKEN_WORDS, 0, 2, FIXED_OPTIONS);
+    const fromThirdToken = sliceText(
       SINGLE_TOKEN_WORDS,
       2,
       undefined,
@@ -268,51 +232,46 @@ describe("sliceByTokens", () => {
 
   it("cuts inside a segment when the boundary falls mid-word", () => {
     expect(
-      sliceByTokens(MULTI_TOKEN_WORDS, 0, 3, FIXED_OPTIONS),
+      sliceText(MULTI_TOKEN_WORDS, 0, 3, FIXED_OPTIONS),
     ).toMatchInlineSnapshot(`"Die pünktl"`);
     expect(
-      sliceByTokens(MULTI_TOKEN_WORDS, 5, 10, FIXED_OPTIONS),
+      sliceText(MULTI_TOKEN_WORDS, 5, 10, FIXED_OPTIONS),
     ).toMatchInlineSnapshot(`"ünschte Trüffelfüll"`);
   });
 
   it("counts back from the end for negative indices", () => {
     expect(
-      sliceByTokens(MULTI_TOKEN_WORDS, -3, undefined, FIXED_OPTIONS),
+      sliceText(MULTI_TOKEN_WORDS, -3, undefined, FIXED_OPTIONS),
     ).toMatchInlineSnapshot(`" führen."`);
     expect(
-      sliceByTokens(MULTI_TOKEN_WORDS, -8, -3, FIXED_OPTIONS),
+      sliceText(MULTI_TOKEN_WORDS, -8, -3, FIXED_OPTIONS),
     ).toMatchInlineSnapshot(`" Hülle und Fülle"`);
 
-    const withoutLastTwo = sliceByTokens(
-      MULTI_TOKEN_WORDS,
-      0,
-      -2,
-      FIXED_OPTIONS,
-    );
+    const withoutLastTwo = sliceText(MULTI_TOKEN_WORDS, 0, -2, FIXED_OPTIONS);
     expect(MULTI_TOKEN_WORDS.startsWith(withoutLastTwo)).toBe(true);
     expect(withoutLastTwo.length).toBeLessThan(MULTI_TOKEN_WORDS.length);
   });
 
   it("returns an empty string when the range is empty or inverted", () => {
-    expect(sliceByTokens(MULTI_TOKEN_WORDS, 10, 5)).toBe("");
-    expect(sliceByTokens(MULTI_TOKEN_WORDS, 5, 5)).toBe("");
+    expect(sliceText(MULTI_TOKEN_WORDS, 10, 5)).toBe("");
+    expect(sliceText(MULTI_TOKEN_WORDS, 5, 5)).toBe("");
   });
 
   it("clamps out-of-range indices like Array.prototype.slice", () => {
-    const totalTokens = estimateTokenCount(MULTI_TOKEN_WORDS);
+    const totalTokens = countText(MULTI_TOKEN_WORDS);
 
-    expect(sliceByTokens(MULTI_TOKEN_WORDS, totalTokens + 10)).toBe("");
-    expect(sliceByTokens(MULTI_TOKEN_WORDS, 0, totalTokens + 10)).toBe(
+    expect(sliceText(MULTI_TOKEN_WORDS, totalTokens + 10)).toBe("");
+    expect(sliceText(MULTI_TOKEN_WORDS, 0, totalTokens + 10)).toBe(
       MULTI_TOKEN_WORDS,
     );
-    expect(sliceByTokens(MULTI_TOKEN_WORDS, -1000)).toBe(MULTI_TOKEN_WORDS);
+    expect(sliceText(MULTI_TOKEN_WORDS, -1000)).toBe(MULTI_TOKEN_WORDS);
   });
 
   it("applies custom options to slice boundaries", () => {
     // Long ASCII words, so the default ratio governs rather than a language rule.
     const text = "Estimation heuristics approximate tokenizers";
-    const defaultSlice = sliceByTokens(text, 0, 3);
-    const customSlice = sliceByTokens(text, 0, 3, { defaultCharsPerToken: 2 });
+    const defaultSlice = sliceText(text, 0, 3);
+    const customSlice = sliceText(text, 0, 3, { defaultCharsPerToken: 2 });
 
     // With more tokens per text, the same token range covers less of it.
     expect(customSlice.length).toBeLessThan(defaultSlice.length);
@@ -321,13 +280,13 @@ describe("sliceByTokens", () => {
 
 describe("splitByTokens", () => {
   it("splits text into chunks that reconstruct the input", () => {
-    const chunks = splitByTokens(SINGLE_TOKEN_WORDS, 5);
+    const chunks = splitText(SINGLE_TOKEN_WORDS, 5);
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.join("")).toBe(SINGLE_TOKEN_WORDS);
   });
 
   it("repeats trailing tokens of a chunk at the start of the next when overlap is set", () => {
-    const chunks = splitByTokens("aaaa bbbb cccc dddd eeee", 2, { overlap: 1 });
+    const chunks = splitText("aaaa bbbb cccc dddd eeee", 2, { overlap: 1 });
     expect(chunks).toEqual([
       "aaaa bbbb",
       "bbbb cccc",
@@ -337,35 +296,35 @@ describe("splitByTokens", () => {
   });
 
   it("returns an empty array for empty input", () => {
-    expect(splitByTokens("", 5)).toEqual([]);
+    expect(splitText("", 5)).toEqual([]);
   });
 
   it("returns an empty array for a non-positive target chunk size", () => {
-    expect(splitByTokens("text", 0)).toEqual([]);
-    expect(splitByTokens("text", -5)).toEqual([]);
+    expect(splitText("text", 0)).toEqual([]);
+    expect(splitText("text", -5)).toEqual([]);
   });
 
   it("returns a single chunk when the text is smaller than the target", () => {
     const shortText = "Hi there";
-    expect(splitByTokens(shortText, 100)).toEqual([shortText]);
+    expect(splitText(shortText, 100)).toEqual([shortText]);
   });
 
   it("exceeds the target when a single segment crosses it", () => {
     const longWord = "supercalifragilisticexpialidocious";
 
-    expect(estimateTokenCount(longWord)).toBeGreaterThan(2);
-    expect(splitByTokens(longWord, 2)).toEqual([longWord]);
+    expect(countText(longWord)).toBeGreaterThan(2);
+    expect(splitText(longWord, 2)).toEqual([longWord]);
   });
 
   it("does not emit a trailing chunk containing only overlap content", () => {
-    const chunks = splitByTokens("aaaa bbbb cccc dddd", 2, { overlap: 1 });
+    const chunks = splitText("aaaa bbbb cccc dddd", 2, { overlap: 1 });
     expect(chunks).toEqual(["aaaa bbbb", "bbbb cccc", "cccc dddd"]);
   });
 
   it("clamps overlap below the target chunk size", () => {
     const text = "aaaa bbbb cccc dddd eeee";
-    const oversizedOverlapChunks = splitByTokens(text, 2, { overlap: 5 });
-    const clampedOverlapChunks = splitByTokens(text, 2, { overlap: 1 });
+    const oversizedOverlapChunks = splitText(text, 2, { overlap: 5 });
+    const clampedOverlapChunks = splitText(text, 2, { overlap: 1 });
 
     expect(oversizedOverlapChunks).toEqual(clampedOverlapChunks);
   });
@@ -380,21 +339,19 @@ describe("unaccentedWordScale", () => {
   it("scales the unaccented words of a text that the accent rule identifies", () => {
     // Without punctuation, every token but the accented word's is a scaled word.
     const scaled = { unaccentedWordScale: { german: 2 } };
-    const accented = estimateTokenCount("Träumen");
-    const plain = estimateTokenCount(german) - accented;
-    expect(estimateTokenCount(german, scaled)).toBe(2 * plain + accented);
+    const accented = countText("Träumen");
+    const plain = countText(german) - accented;
+    expect(countText(german, scaled)).toBe(2 * plain + accented);
     // A text without accented words keeps its estimate.
-    expect(estimateTokenCount(english, scaled)).toBe(
-      estimateTokenCount(english),
-    );
+    expect(countText(english, scaled)).toBe(countText(english));
   });
 
   it("applies the scale in proportion below 5% accented words", () => {
     // One accented word among 40 words: 2.5%, so half of the scale applies.
     const text = `${Array(39).fill("Haus").join(" ")} Träume`;
-    const plain = estimateTokenCount(text) - estimateTokenCount("Träume");
-    expect(
-      estimateTokenCount(text, { unaccentedWordScale: { german: 3 } }),
-    ).toBe(Math.round(2 * plain) + estimateTokenCount("Träume"));
+    const plain = countText(text) - countText("Träume");
+    expect(countText(text, { unaccentedWordScale: { german: 3 } })).toBe(
+      Math.round(2 * plain) + countText("Träume"),
+    );
   });
 });

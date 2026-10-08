@@ -1,6 +1,6 @@
 import { encode } from "gpt-tokenizer/encoding/o200k_base";
 import { describe, expect, it } from "vitest";
-import { estimateTokenCount } from "../src/index";
+import { countText } from "./fixtures/text.ts";
 
 /**
  * A group of inputs that all exercise one estimation rule. Snapshots record
@@ -549,7 +549,7 @@ function measureSamples(bucket: HeuristicBucket): SampleMeasurement[] {
   return tiers.flatMap(([tier, texts]) =>
     (texts ?? []).map((text) => {
       const referenceTokenCount = encode(text).length;
-      const estimatedTokenCount = estimateTokenCount(text);
+      const estimatedTokenCount = countText(text);
 
       return {
         tier,

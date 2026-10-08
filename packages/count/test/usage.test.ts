@@ -3,12 +3,9 @@ import { jsonSchema, tool, zodSchema } from "ai";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import type { UsageInput } from "../src/index";
-import {
-  createUsageEstimator,
-  estimateTokenCount,
-  estimateUsage,
-} from "../src/index";
+import { createUsageEstimator } from "../src/index";
 import { ZERO_COSTS } from "./fixtures/profile-fields.ts";
+import { countText } from "./fixtures/text.ts";
 
 // Structural overhead is zero so the expected counts expose the text and media rules.
 const profile = {
@@ -17,7 +14,7 @@ const profile = {
   perFile: 17,
 };
 const estimator = createUsageEstimator(profile);
-const textCount = (text: string): number => estimateTokenCount(text);
+const textCount = (text: string): number => countText(text);
 
 describe("message estimation", () => {
   it("keeps estimates correct when the bounded text cache fills or strings exceed its limit", () => {
@@ -494,14 +491,13 @@ describe("tool schema estimation", () => {
     expect(uncached.count(input)).toBe(original);
     expect(uncached.count(input, { breakdown: true })).toEqual(breakdown);
     expect(reads).toBe(2);
-    expect(estimateUsage(input, { profile, cache: false })).toBe(original);
-    expect(estimateTokenCount("Größenordnung naïve", { cache: false })).toBe(
-      estimateTokenCount("Größenordnung naïve"),
+    expect(countText("Größenordnung naïve", { cache: false })).toBe(
+      countText("Größenordnung naïve"),
     );
   });
 });
 
-it("counts the same with an estimator, estimateUsage and a breakdown across seeded requests", () => {
+it("counts the same with and without caching, and with a breakdown, across seeded requests", () => {
   let seed = 42;
   const random = (): number => {
     seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
@@ -514,6 +510,7 @@ it("counts the same with an estimator, estimateUsage and a breakdown across seed
     perTool: -1,
   };
   const custom = createUsageEstimator(profile);
+  const uncached = createUsageEstimator(profile, { cache: false });
   for (let index = 0; index < 100; index++) {
     const messages: ModelMessage[] = [{ role: "system", content: "Be brief." }];
     for (let n = 0, length = Math.floor(random() * 12); n < length; n++)
@@ -531,13 +528,12 @@ it("counts the same with an estimator, estimateUsage and a breakdown across seed
     };
     const input = { messages, tools };
     const expected = custom.count(input);
-    expect(estimateUsage(input, { profile })).toBe(expected);
-    expect(estimateUsage(input, { profile, cache: false })).toBe(expected);
+    expect(uncached.count(input)).toBe(expected);
     expect(custom.count(input, { breakdown: true }).total).toBe(expected);
   }
 });
 
-it("passes a schema converter through estimateUsage", () => {
+it("reads unknown schemas through a schema converter", () => {
   const unreadable = { shape: "query" };
   const input: UsageInput = {
     messages: [{ role: "user", content: "Find books." }],
@@ -552,8 +548,7 @@ it("passes a schema converter through estimateUsage", () => {
   const converted = createUsageEstimator(undefined, { toJsonSchema }).count(
     input,
   );
-  expect(converted).toBeGreaterThan(estimateUsage(input));
-  expect(estimateUsage(input, { toJsonSchema })).toBe(converted);
+  expect(converted).toBeGreaterThan(createUsageEstimator().count(input));
 });
 
 const encrypted = {
@@ -670,7 +665,7 @@ it("charges OpenRouter payloads once per request with the envelope formula, with
   const input: UsageInput = {
     messages: [message("First."), message("Second.")],
   };
-  const text = estimateTokenCount("First.") + estimateTokenCount("Second.");
+  const text = countText("First.") + countText("Second.");
   // The same detail repeated in a later message is sent once.
   expect(createUsageEstimator(profile).count(input)).toBe(
     text + 0.5 * (200 - 100),
@@ -709,9 +704,9 @@ it("charges each OpenAI reasoning item once by its payload, without summary text
     reasoningPayloadEnvelopeChars: 10,
   };
   const answer =
-    estimateTokenCount("The answer.") +
-    estimateTokenCount("A question.") +
-    estimateTokenCount("Continue.");
+    countText("The answer.") +
+    countText("A question.") +
+    countText("Continue.");
   expect(createUsageEstimator(profile).count(openaiHistory())).toBe(
     answer - 5 + 200,
   );
@@ -721,7 +716,7 @@ it("charges each OpenAI reasoning item once by its payload, without summary text
   expect(breakdown.messages[1]!.parts.map((part) => part.total)).toEqual([
     195,
     0,
-    estimateTokenCount("The answer."),
+    countText("The answer."),
   ]);
   // Stored items have no payload: their summaries, scaled, estimate them.
   const stored: UsageInput = {
@@ -749,8 +744,7 @@ it("charges each OpenAI reasoning item once by its payload, without summary text
     storedReasoningSummaryScale: 3,
   };
   expect(createUsageEstimator(storedProfile).count(stored)).toBe(
-    3 *
-      (estimateTokenCount("First idea.") + estimateTokenCount("Second idea.")),
+    3 * (countText("First idea.") + countText("Second idea.")),
   );
 });
 
@@ -771,7 +765,7 @@ it("charges a stored OpenAI reasoning item without summary text its mean cost, o
     role === "user"
       ? { role, content: "a" }
       : { role, content: [empty, { ...empty }] };
-  const a = estimateTokenCount("a");
+  const a = countText("a");
   expect(
     createUsageEstimator(profile).count({
       messages: [turn("user"), turn("assistant")],
@@ -783,4 +777,93 @@ it("charges a stored OpenAI reasoning item without summary text its mean cost, o
       messages: [turn("user"), turn("assistant"), turn("user")],
     }),
   ).toBe(2 * a);
+});
+
+describe("text input", () => {
+  const texts = [
+    "",
+    "What is the weather in Boston?",
+    "Als Gregor Samsa eines Morgens aus unruhigen Träumen erwachte, fand er sich in seinem Bett verwandelt.",
+    "猫（英语：cat）通常指家猫。 user_id = 42; 😀",
+  ];
+
+  it("counts a text like estimateTokenCount with the same profile", () => {
+    for (const profile of [
+      undefined,
+      "anthropic/claude-sonnet-5.5",
+      "openai/gpt-6.1-sol",
+      { contentMultiplier: 1.37, text: { defaultCharsPerToken: 3 } },
+    ] as const) {
+      const estimator = createUsageEstimator(profile);
+      for (const text of texts) {
+        const expected = countText(text, { profile });
+        expect(estimator.count({ text }), text).toBe(expected);
+      }
+    }
+  });
+
+  it("counts no request overhead for a text", () => {
+    const estimator = createUsageEstimator("anthropic/claude-sonnet-5.5");
+    const text = "What is the weather in Boston?";
+    expect(
+      estimator.count({ messages: [{ role: "user", content: text }] }),
+    ).toBeGreaterThan(estimator.count({ text }));
+  });
+
+  it("rejects a breakdown of a text and an input without text or messages", () => {
+    const estimator = createUsageEstimator();
+    expect(() =>
+      estimator.count({ text: "a" }, { breakdown: true } as never),
+    ).toThrow(/breakdown/);
+    expect(() => estimator.count({} as never)).toThrow(/messages/);
+  });
+});
+
+describe("estimator text methods", () => {
+  const estimator = createUsageEstimator("anthropic/claude-sonnet-5.5");
+  const text = "The harbor library opens before sunrise. ".repeat(40);
+
+  it("checks a text or a request against a limit", () => {
+    const tokens = estimator.count({ text });
+    expect(estimator.isWithinTokenLimit({ text }, tokens)).toBe(true);
+    expect(estimator.isWithinTokenLimit({ text }, tokens - 1)).toBe(false);
+    const request = { messages: [{ role: "user" as const, content: text }] };
+    const requestTokens = estimator.count(request);
+    expect(requestTokens).toBeGreaterThan(tokens);
+    expect(estimator.isWithinTokenLimit(request, requestTokens)).toBe(true);
+    expect(estimator.isWithinTokenLimit(request, tokens)).toBe(false);
+  });
+
+  it("slices and splits by the estimator's profile", () => {
+    const start = estimator.sliceByTokens(text, 0, 10);
+    expect(text.startsWith(start)).toBe(true);
+    expect(estimator.count({ text: start })).toBeLessThanOrEqual(10);
+    expect(estimator.sliceByTokens(text, -10)).toBe(
+      text.slice(text.length - estimator.sliceByTokens(text, -10).length),
+    );
+    const chunks = estimator.splitByTokens(text, 50);
+    expect(chunks.join("")).toBe(text);
+    for (const chunk of chunks.slice(0, -1))
+      expect(estimator.count({ text: chunk })).toBeGreaterThanOrEqual(50);
+    // Overlapping chunks repeat the end of the previous chunk.
+    const overlapping = estimator.splitByTokens(text, 50, { overlap: 10 });
+    expect(overlapping.length).toBeGreaterThan(chunks.length);
+    expect(estimator.splitByTokens("", 50)).toEqual([]);
+    expect(estimator.splitByTokens(text, 0)).toEqual([]);
+  });
+
+  it("applies custom language configs to texts and requests", () => {
+    const hebrew = "שלום עולם, מה שלומך היום?";
+    const custom = createUsageEstimator(undefined, {
+      languageConfigs: [{ pattern: /[֐-׿]/, averageCharsPerToken: 1 }],
+    });
+    const plain = createUsageEstimator();
+    expect(custom.count({ text: hebrew })).toBeGreaterThan(
+      plain.count({ text: hebrew }),
+    );
+    const request = { messages: [{ role: "user" as const, content: hebrew }] };
+    expect(custom.count(request) - plain.count(request)).toBe(
+      custom.count({ text: hebrew }) - plain.count({ text: hebrew }),
+    );
+  });
 });

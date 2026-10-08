@@ -1,11 +1,8 @@
-import type {
-  CompiledProfile,
-  ModelProfile,
-  ResolvedModelProfile,
-} from "../profile.ts";
+import type { CompiledProfile, ResolvedModelProfile } from "../profile.ts";
 import { compileProfile, Feature, TALLY_LENGTH } from "../profile.ts";
 import type { ModelProfileInput } from "../profiles.ts";
-import { selectProfile } from "../profiles.ts";
+import { countTextTokens } from "../segments.ts";
+import { sliceText, splitText } from "../text.ts";
 import type { WalkContext } from "./context.ts";
 import { tallyValue } from "./context.ts";
 import { walkMessage } from "./messages.ts";
@@ -15,6 +12,7 @@ import type {
   CountOptions,
   EstimatorOptions,
   MessageBreakdown,
+  TextInput,
   UsageBreakdown,
   UsageInput,
 } from "./types.ts";
@@ -22,12 +20,33 @@ import type {
 export interface UsageEstimator {
   /** The profile with all defaults filled in. */
   readonly profile: ResolvedModelProfile;
-  /** Estimates the input tokens of a request, or returns a breakdown when `breakdown` is set. */
+  /**
+   * Estimates the input tokens of a request (`{ messages, tools }`), or of a
+   * text alone (`{ text }`), without request overhead.
+   * With `breakdown`, returns where the tokens of a request come from.
+   */
   count: {
-    (input: UsageInput, options?: { breakdown?: false }): number;
+    (input: UsageInput | TextInput, options?: { breakdown?: false }): number;
     (input: UsageInput, options: { breakdown: true }): UsageBreakdown;
     (input: UsageInput, options?: CountOptions): number | UsageBreakdown;
   };
+  /** Whether a request or text has at most `limit` estimated tokens. */
+  isWithinTokenLimit(input: UsageInput | TextInput, limit: number): boolean;
+  /**
+   * The part of a text between two token positions, like
+   * `Array.prototype.slice()`. Negative positions count from the end.
+   */
+  sliceByTokens(text: string, start?: number, end?: number): string;
+  /**
+   * Splits a text into chunks of about `tokensPerChunk` tokens. `overlap`
+   * repeats the last tokens of a chunk at the start of the next one; it is
+   * kept below the chunk size.
+   */
+  splitByTokens(
+    text: string,
+    tokensPerChunk: number,
+    options?: { overlap?: number },
+  ): string[];
 }
 
 /**
@@ -42,13 +61,29 @@ export function createUsageEstimator(
   options: EstimatorOptions = {},
 ): UsageEstimator {
   const cache = options.cache !== false;
-  const compiled = compileProfile(profile, cache);
+  const compiled = compileProfile(profile, cache, options.languageConfigs);
   const toolCache: ToolCache | undefined = cache ? new WeakMap() : undefined;
+  // The text APIs apply the multiplier to the text alone.
+  const textOptions = {
+    ...compiled.text,
+    contentMultiplier: compiled.profile.contentMultiplier,
+  };
 
   function count(
-    input: UsageInput,
+    input: UsageInput | TextInput,
     countOptions?: CountOptions,
   ): number | UsageBreakdown {
+    if (!("messages" in input)) {
+      if (typeof input?.text !== "string")
+        throw new TypeError(
+          "tokenxl: Pass a request with `messages`, or `{ text }`.",
+        );
+      if (countOptions?.breakdown)
+        throw new TypeError(
+          "tokenxl: A breakdown needs a request with `messages`.",
+        );
+      return input.text ? countTextTokens(input.text, textOptions) : 0;
+    }
     const context = createContext(compiled);
 
     if (!countOptions?.breakdown) {
@@ -71,61 +106,19 @@ export function createUsageEstimator(
   return {
     profile: compiled.profile,
     count: count as UsageEstimator["count"],
+    isWithinTokenLimit: (input, limit) => (count(input) as number) <= limit,
+    sliceByTokens: (text, start = 0, end) =>
+      text ? sliceText(text, start, end, textOptions) : "",
+    splitByTokens: (text, tokensPerChunk, splitOptions = {}) =>
+      text && tokensPerChunk > 0
+        ? splitText(
+            text,
+            tokensPerChunk,
+            splitOptions.overlap ?? 0,
+            textOptions,
+          )
+        : [],
   };
-}
-
-const estimatorsByProfile = new WeakMap<ModelProfile, UsageEstimator>();
-let defaultEstimator: UsageEstimator | undefined;
-
-interface EstimateUsageOptions extends EstimatorOptions {
-  profile?: ModelProfileInput;
-  breakdown?: boolean;
-}
-
-/**
- * Estimates the input tokens of a request with AI SDK messages and tools.
- * Unless `cache` is `false`, keeps one estimator for each profile object, so
- * pass the same profile object on each call to reuse its caches. With
- * `toJsonSchema`, each call creates its own estimator.
- */
-export function estimateUsage(
-  input: UsageInput,
-  options?: EstimateUsageOptions & { breakdown?: false },
-): number;
-export function estimateUsage(
-  input: UsageInput,
-  options: EstimateUsageOptions & { breakdown: true },
-): UsageBreakdown;
-export function estimateUsage(
-  input: UsageInput,
-  options?: EstimateUsageOptions,
-): number | UsageBreakdown;
-export function estimateUsage(
-  input: UsageInput,
-  options: EstimateUsageOptions = {},
-): number | UsageBreakdown {
-  const { profile, breakdown, ...estimatorOptions } = options;
-  // A shared estimator would keep the first converter's results in its cache.
-  const estimator =
-    options.cache === false || options.toJsonSchema
-      ? createUsageEstimator(profile, estimatorOptions)
-      : getEstimator(profile);
-  return estimator.count(input, { breakdown });
-}
-
-function getEstimator(input: ModelProfileInput | undefined): UsageEstimator {
-  const profile = selectProfile(input);
-  if (!profile) {
-    defaultEstimator ??= createUsageEstimator();
-    return defaultEstimator;
-  }
-
-  let estimator = estimatorsByProfile.get(profile);
-  if (!estimator) {
-    estimator = createUsageEstimator(profile);
-    estimatorsByProfile.set(profile, estimator);
-  }
-  return estimator;
 }
 
 /** Counts the features of a request without weighting them. */
@@ -173,7 +166,7 @@ function walkInput(
       parts: [],
     };
     walkMessage(message, context, messageBreakdown);
-    if (messageBreakdown) breakdown!.messages.push(messageBreakdown);
+    if (messageBreakdown) breakdown?.messages.push(messageBreakdown);
   }
   if (input.tools)
     walkToolSet(input.tools, context, options, breakdown?.tools, toolCache);

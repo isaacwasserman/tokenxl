@@ -10,12 +10,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/isaacwasserman/tokenx.git",
+    "url": "git+https://github.com/isaacwasserman/tokenxl.git",
     "directory": "packages/count"
   },
-  "homepage": "https://github.com/isaacwasserman/tokenx/tree/main/packages/count#readme",
+  "homepage": "https://github.com/isaacwasserman/tokenxl/tree/main/packages/count#readme",
   "bugs": {
-    "url": "https://github.com/isaacwasserman/tokenx/issues"
+    "url": "https://github.com/isaacwasserman/tokenxl/issues"
   },
   "keywords": [
     "ai",
@@ -56,7 +56,8 @@
     "build": "tsdown",
     "dev": "node ./src/cli/entry.ts --help",
     "benchmark": "node scripts/benchmark.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepack": "cp ../../README.md README.md"
   },
   "peerDependencies": {
     "ai": "^5.0.0 || ^6.0.0 || ^7.0.0"

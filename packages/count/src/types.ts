@@ -45,25 +45,8 @@ export interface TextProfile {
   unaccentedWordScale?: Partial<Record<AccentLanguageId, number>>;
 }
 
-export interface TokenEstimationOptions extends TextProfile {
-  /** Predefined model ID or custom profile; omitted profiles use the defaults. */
-  profile?: ModelProfileInput;
-  /** Custom language configurations to override defaults. */
-  languageConfigs?: LanguageConfig[];
-  /**
-   * Reuse estimates of repeated slow-path words, bounded to 8,192 entries.
-   * Default `true`; set `false` to keep no state between calls.
-   */
-  cache?: boolean;
-}
-
 export interface LanguageConfig {
   /** Regular expression to detect the language. */
   pattern: RegExp;
   averageCharsPerToken: number;
-}
-
-export interface SplitByTokensOptions extends TokenEstimationOptions {
-  /** Number of tokens to overlap between consecutive chunks (default: 0, clamped below the target chunk size). */
-  overlap?: number;
 }

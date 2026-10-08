@@ -10,12 +10,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/isaacwasserman/tokenx.git",
+    "url": "git+https://github.com/isaacwasserman/tokenxl.git",
     "directory": "packages/tune"
   },
-  "homepage": "https://github.com/isaacwasserman/tokenx/tree/main/packages/tune#readme",
+  "homepage": "https://github.com/isaacwasserman/tokenxl/tree/main/packages/tune#readme",
   "bugs": {
-    "url": "https://github.com/isaacwasserman/tokenx/issues"
+    "url": "https://github.com/isaacwasserman/tokenxl/issues"
   },
   "keywords": [
     "ai",
@@ -52,7 +52,8 @@
   "scripts": {
     "build": "tsdown",
     "test": "vitest run",
-    "tune": "node --conditions=tokenxl-source --env-file-if-exists=../../.env scripts/tune.ts"
+    "tune": "node --conditions=tokenxl-source --env-file-if-exists=../../.env scripts/tune.ts",
+    "prepack": "cp ../../README.md README.md"
   },
   "dependencies": {
     "@tokenxl/count": "workspace:*"

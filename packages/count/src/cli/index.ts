@@ -2,14 +2,8 @@ import process from "node:process";
 import type { ArgsDef, CommandDef, ParsedArgs } from "utilful/cli";
 import { CliError, commonArgs, defineCommand, log } from "utilful/cli";
 import pkg from "../../package.json" with { type: "json" };
-import type { ModelId } from "../index.ts";
-import {
-  estimateTokenCount,
-  MODEL_PROFILES,
-  sliceByTokens,
-  splitByTokens,
-} from "../index.ts";
-import type { TokenEstimationOptions } from "../types.ts";
+import type { ModelId, ModelProfile, UsageEstimator } from "../index.ts";
+import { createUsageEstimator, MODEL_PROFILES } from "../index.ts";
 import { readInputs } from "./input.ts";
 
 const { version } = pkg;
@@ -98,13 +92,13 @@ const countCommand: CommandDef<ArgsDef> = defineCommand({
   args: countArgs,
   allowExtraPositionals: true,
   async run({ args }) {
-    const options = resolveEstimationOptions(args);
+    const estimator = createEstimator(args);
     const limit = parseInteger("limit", args.limit, 0);
 
     const documents = await readInputs(args._);
     const counts: InputCount[] = documents.map(({ label, text }) => ({
       label,
-      tokenCount: estimateTokenCount(text, options),
+      tokenCount: estimator.count({ text }),
     }));
     const total = counts.reduce((sum, { tokenCount }) => sum + tokenCount, 0);
 
@@ -129,7 +123,7 @@ const sliceCommand: CommandDef<ArgsDef> = defineCommand({
   args: sliceArgs,
   allowExtraPositionals: true,
   async run({ args }) {
-    const options = resolveEstimationOptions(args);
+    const estimator = createEstimator(args);
     const start = parseInteger("start", args.start);
     const end = parseInteger("end", args.end);
 
@@ -137,7 +131,7 @@ const sliceCommand: CommandDef<ArgsDef> = defineCommand({
 
     // A trailing newline keeps the shell prompt on a fresh line; command
     // substitution strips it again, so scripts see the slice verbatim.
-    process.stdout.write(`${sliceByTokens(text, start, end, options)}\n`);
+    process.stdout.write(`${estimator.sliceByTokens(text, start, end)}\n`);
   },
 });
 
@@ -150,12 +144,12 @@ const splitCommand: CommandDef<ArgsDef> = defineCommand({
   args: splitArgs,
   allowExtraPositionals: true,
   async run({ args }) {
-    const options = resolveEstimationOptions(args);
+    const estimator = createEstimator(args);
     const size = parseInteger("size", args.size, 1) ?? DEFAULT_CHUNK_SIZE;
     const overlap = parseInteger("overlap", args.overlap, 0);
 
     const text = await readSingleInput(args._);
-    const chunks = splitByTokens(text, size, { ...options, overlap });
+    const chunks = estimator.splitByTokens(text, size, { overlap });
 
     // Arbitrary text has no honest raw framing – JSON is the only unambiguous one.
     process.stdout.write(`${JSON.stringify(chunks)}\n`);
@@ -184,17 +178,18 @@ async function readSingleInput(paths: string[]): Promise<string> {
   return document!.text;
 }
 
-function resolveEstimationOptions(
-  args: ParsedArgs<ArgsDef>,
-): TokenEstimationOptions {
-  const options: TokenEstimationOptions = {};
-  const profile = args.profile;
-  if (profile !== undefined) {
-    if (typeof profile !== "string" || !Object.hasOwn(MODEL_PROFILES, profile))
+/** An estimator for the --profile and --chars-per-token options. */
+function createEstimator(args: ParsedArgs<ArgsDef>): UsageEstimator {
+  let profile: ModelProfile = {};
+  if (args.profile !== undefined) {
+    if (
+      typeof args.profile !== "string" ||
+      !Object.hasOwn(MODEL_PROFILES, args.profile)
+    )
       throw new CliError(
-        `Unknown --profile ${String(profile)}; expected one of ${Object.keys(MODEL_PROFILES).join(", ")}`,
+        `Unknown --profile ${String(args.profile)}; expected one of ${Object.keys(MODEL_PROFILES).join(", ")}`,
       );
-    options.profile = profile as ModelId;
+    profile = MODEL_PROFILES[args.profile as ModelId];
   }
   const raw = args["chars-per-token"];
   if (raw !== undefined) {
@@ -204,9 +199,12 @@ function resolveEstimationOptions(
       : Number.NaN;
     if (!(value > 0))
       throw new CliError(`Invalid --chars-per-token value: ${String(raw)}`);
-    options.defaultCharsPerToken = value;
+    profile = {
+      ...profile,
+      text: { ...profile.text, defaultCharsPerToken: value },
+    };
   }
-  return options;
+  return createUsageEstimator(profile);
 }
 
 function parseInteger(

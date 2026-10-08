@@ -1,11 +1,24 @@
+import type { ModelProfileInput } from "./profiles.ts";
 import { selectProfile } from "./profiles.ts";
 import type {
   AccentLanguageId,
   LanguageConfig,
   LanguageId,
   TextProfile,
-  TokenEstimationOptions,
 } from "./types.ts";
+
+/** Text options: a profile, its text ratios, and custom language configs. */
+export interface TokenEstimationOptions extends TextProfile {
+  /** Predefined model ID or custom profile; omitted profiles use the defaults. */
+  profile?: ModelProfileInput;
+  /** Custom language configurations to override defaults. */
+  languageConfigs?: LanguageConfig[];
+  /**
+   * Reuse estimates of repeated slow-path words, bounded to 8,192 entries.
+   * Default `true`; set `false` to keep no state between calls.
+   */
+  cache?: boolean;
+}
 
 export const PATTERNS: Readonly<
   Record<"nonAscii" | "cjk" | "numeric" | "lowercaseWord", RegExp>

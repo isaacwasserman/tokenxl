@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { encode } from "gpt-tokenizer/encoding/o200k_base";
 import { describe, expect, it } from "vitest";
-import { estimateTokenCount } from "../src/index";
+import { countText } from "./fixtures/text.ts";
 
 /**
  * Texts no ratio was ever fitted against. The benchmark corpus and the
@@ -54,8 +54,7 @@ async function measureDeviation(file: string): Promise<number> {
   const referenceTokenCount = encode(text).length;
 
   return (
-    (Math.abs(referenceTokenCount - estimateTokenCount(text)) /
-      referenceTokenCount) *
+    (Math.abs(referenceTokenCount - countText(text)) / referenceTokenCount) *
     100
   );
 }

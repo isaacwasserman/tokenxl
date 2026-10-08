@@ -1,7 +1,7 @@
 import type { ModelMessage, ToolSet } from "ai";
 import { jsonSchema, tool } from "ai";
 import { expect, it } from "vitest";
-import { createUsageEstimator, estimateUsage } from "../src/index";
+import { createUsageEstimator } from "../src/index";
 import { ZERO_COSTS } from "./fixtures/profile-fields.ts";
 
 it("shows the shape of a basic request breakdown", () => {
@@ -75,9 +75,6 @@ it("accounts for message, tool and property costs without intermediate rounding"
   const input = { messages, tools };
   const result = estimator.count(input, { breakdown: true });
   expect(result.total).toBe(estimator.count(input));
-  expect(estimateUsage(input, { breakdown: true }).total).toBe(
-    estimateUsage(input),
-  );
   expect(
     Math.round(
       result.baseOverhead +

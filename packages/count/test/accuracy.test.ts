@@ -1,12 +1,13 @@
 import { encode } from "gpt-tokenizer/encoding/o200k_base";
 import { describe, expect, it } from "vitest";
-import { estimateTokenCount } from "../src/index";
+
 import {
   BENCHMARK_SAMPLES,
   MAX_MEAN_DEVIATION,
   MAX_SAMPLE_DEVIATION,
   readSampleText,
 } from "./fixtures/samples";
+import { countText } from "./fixtures/text.ts";
 
 describe("accuracy against the reference tokenizer", () => {
   for (const sample of BENCHMARK_SAMPLES) {
@@ -32,7 +33,7 @@ async function measureDeviation(
 ): Promise<number> {
   const text = await readSampleText(sample);
   const referenceTokenCount = encode(text).length;
-  const estimatedTokenCount = estimateTokenCount(text);
+  const estimatedTokenCount = countText(text);
   return (
     (Math.abs(referenceTokenCount - estimatedTokenCount) /
       referenceTokenCount) *

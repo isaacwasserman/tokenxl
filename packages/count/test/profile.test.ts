@@ -6,11 +6,11 @@ import type { ModelProfile, ProfileField, UsageInput } from "../src/index";
 import {
   createUsageEstimator,
   DEFAULT_PROFILE,
-  estimateTokenCount,
   resolveProfile,
 } from "../src/index";
 import { DEFAULT_TEXT_PROFILE } from "../src/index.ts";
 import { ZERO_COSTS } from "./fixtures/profile-fields.ts";
+import { countText } from "./fixtures/text.ts";
 
 const STEP = 1000;
 
@@ -421,12 +421,10 @@ describe("profile fields", () => {
     });
     const input: UsageInput = { messages: [textMessage("user", text)] };
 
-    expect(createUsageEstimator(zero).count(input)).toBe(
-      estimateTokenCount(text),
-    );
+    expect(createUsageEstimator(zero).count(input)).toBe(countText(text));
     expect(
       createUsageEstimator({ ...zero, contentMultiplier: 2 }).count(input),
-    ).toBe(2 * estimateTokenCount(text));
+    ).toBe(2 * countText(text));
   });
 
   it("applies the text ratios of the profile", () => {
@@ -439,7 +437,7 @@ describe("profile fields", () => {
         ...zero,
         text: { defaultCharsPerToken: 3 },
       }).count(input),
-    ).toBe(estimateTokenCount(text, { defaultCharsPerToken: 3 }));
+    ).toBe(countText(text, { defaultCharsPerToken: 3 }));
   });
 
   it("counts a plain JSON Schema like the same Zod schema", () => {

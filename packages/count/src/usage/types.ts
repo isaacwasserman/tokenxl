@@ -1,11 +1,23 @@
 import type { JSONSchema7, ModelMessage, ToolSet } from "ai";
+import type { LanguageConfig } from "../types.ts";
 
+/** A request: AI SDK messages and tools. */
 export interface UsageInput {
   messages: readonly ModelMessage[];
   tools?: ToolSet;
 }
 
+/** A text on its own, without request overhead. */
+export interface TextInput {
+  text: string;
+}
+
 export interface EstimatorOptions {
+  /**
+   * Language rules that replace the built-in ones, for scripts without a
+   * rule. A rule prices the words its pattern matches.
+   */
+  languageConfigs?: LanguageConfig[];
   /**
    * Converts a tool input schema that the estimator cannot read, for example
    * a Zod 3 schema. Must be synchronous. Return `undefined` to count the

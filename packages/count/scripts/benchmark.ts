@@ -17,11 +17,7 @@ import * as claude from "ai-tokenizer/encoding/claude";
 import { count } from "ai-tokenizer/sdk";
 import { encode } from "gpt-tokenizer/encoding/o200k_base";
 import { z } from "zod";
-import {
-  createUsageEstimator,
-  estimateTokenCount,
-  splitByTokens,
-} from "../src/index.ts";
+import { createUsageEstimator } from "../src/index.ts";
 import {
   BENCHMARK_SAMPLES,
   MAX_SAMPLE_DEVIATION,
@@ -60,7 +56,7 @@ async function benchmarkAccuracy(): Promise<string> {
   for (const sample of BENCHMARK_SAMPLES) {
     const text = await readSampleText(sample);
     const referenceTokenCount = encode(text).length;
-    const estimatedTokenCount = estimateTokenCount(text);
+    const estimatedTokenCount = createUsageEstimator().count({ text });
     measurements.push({
       description: sample.description,
       referenceTokenCount,
@@ -85,23 +81,22 @@ async function benchmarkTextSpeed(): Promise<string> {
     await Promise.all(BENCHMARK_SAMPLES.map(readSampleText))
   ).join("\n");
   const claudeTokenizer = new Tokenizer(claude);
+  const estimator = createUsageEstimator();
+  const uncached = createUsageEstimator(undefined, { cache: false });
   return renderTimings(
     `## Text speed
 
 ${corpus.length.toLocaleString("en-US")} UTF-16 code units.`,
     [
-      ["tokenxl estimateTokenCount", () => estimateTokenCount(corpus)],
-      [
-        "tokenxl estimateTokenCount, cache: false",
-        () => estimateTokenCount(corpus, { cache: false }),
-      ],
+      ["tokenxl count", () => estimator.count({ text: corpus })],
+      ["tokenxl count, cache: false", () => uncached.count({ text: corpus })],
       [
         "tokenxl splitByTokens (500-token chunks)",
-        () => splitByTokens(corpus, 500),
+        () => estimator.splitByTokens(corpus, 500),
       ],
       [
         "tokenxl splitByTokens, cache: false",
-        () => splitByTokens(corpus, 500, { cache: false }),
+        () => uncached.splitByTokens(corpus, 500),
       ],
       ["gpt-tokenizer o200k_base encode", () => encode(corpus)],
       ["ai-tokenizer claude count", () => claudeTokenizer.count(corpus)],

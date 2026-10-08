@@ -3,14 +3,10 @@ import { expect, it } from "vitest";
 import type { ModelId, UsageInput } from "../src/index.ts";
 import {
   createUsageEstimator,
-  estimateTokenCount,
-  estimateUsage,
-  isWithinTokenLimit,
   MODEL_PROFILES,
   resolveProfile,
-  sliceByTokens,
-  splitByTokens,
 } from "../src/index.ts";
+import { countText, fitsText, sliceText, splitText } from "./fixtures/text.ts";
 
 it("uses the named profile for complete requests and breakdowns", () => {
   const input: UsageInput = {
@@ -36,12 +32,9 @@ it("uses the named profile for complete requests and breakdowns", () => {
   const named = createUsageEstimator("anthropic/claude-sonnet-5.5");
   expect(named.count(input)).toBe(explicit.count(input));
   expect(named.count(input)).not.toBe(createUsageEstimator().count(input));
-  expect(
-    estimateUsage(input, {
-      profile: "anthropic/claude-sonnet-5.5",
-      breakdown: true,
-    }),
-  ).toEqual(explicit.count(input, { breakdown: true }));
+  expect(named.count(input, { breakdown: true })).toEqual(
+    explicit.count(input, { breakdown: true }),
+  );
   expect(resolveProfile("anthropic/claude-sonnet-5.5")).toEqual(
     resolveProfile(MODEL_PROFILES["anthropic/claude-sonnet-5.5"]),
   );
@@ -52,24 +45,24 @@ it("uses default profiles when omitted or explicitly undefined", () => {
     messages: [{ role: "user", content: "Hello world" }],
   };
   expect(createUsageEstimator().profile).toEqual(resolveProfile());
-  expect(estimateUsage(input, { profile: undefined })).toBe(
+  expect(createUsageEstimator(undefined).count(input)).toBe(
     createUsageEstimator().count(input),
   );
-  expect(estimateTokenCount("123456789", { profile: undefined })).toBe(3);
+  expect(countText("123456789", { profile: undefined })).toBe(3);
 });
 
 it("uses the named text rules in counts, limits, slices and chunks", () => {
   const options = { profile: "anthropic/claude-sonnet-5.5" } as const;
   const text = "123456789 123456789 123456789";
   // Derived from the profile, so a retune does not break the test.
-  const word = estimateTokenCount("123456789", options);
-  const total = estimateTokenCount(text, options);
-  expect(total).not.toBe(estimateTokenCount(text));
-  expect(isWithinTokenLimit(text, total, options)).toBe(true);
-  expect(isWithinTokenLimit(text, total - 1, options)).toBe(false);
-  expect(sliceByTokens(text, 0, word, options)).toBe("123456789");
-  expect(sliceByTokens(text, -word, undefined, options)).toBe(" 123456789");
-  expect(splitByTokens(text, word, options)).toEqual([
+  const word = countText("123456789", options);
+  const total = countText(text, options);
+  expect(total).not.toBe(countText(text));
+  expect(fitsText(text, total, options)).toBe(true);
+  expect(fitsText(text, total - 1, options)).toBe(false);
+  expect(sliceText(text, 0, word, options)).toBe("123456789");
+  expect(sliceText(text, -word, undefined, options)).toBe(" 123456789");
+  expect(splitText(text, word, options)).toEqual([
     "123456789",
     " 123456789",
     " 123456789",
@@ -83,23 +76,23 @@ it("allows explicit text overrides while preserving the remaining model rules", 
     digitsPerToken: 9,
     defaultCharsPerToken: undefined,
   } as const;
-  expect(estimateTokenCount("123456789", options)).toBe(1);
-  expect(estimateTokenCount("Größenordnung", options)).toBe(1);
-  expect(estimateTokenCount("κόσμος", options)).toBe(
-    estimateTokenCount("κόσμος", { profile: "anthropic/claude-sonnet-5.5" }),
+  expect(countText("123456789", options)).toBe(1);
+  expect(countText("Größenordnung", options)).toBe(1);
+  expect(countText("κόσμος", options)).toBe(
+    countText("κόσμος", { profile: "anthropic/claude-sonnet-5.5" }),
   );
   expect(
-    estimateTokenCount("Größenordnung", {
+    countText("Größenordnung", {
       profile: "anthropic/claude-sonnet-5.5",
       languageCharsPerToken: { german: undefined },
     }),
   ).toBe(
-    estimateTokenCount("Größenordnung", {
+    countText("Größenordnung", {
       profile: "anthropic/claude-sonnet-5.5",
     }),
   );
-  expect(estimateTokenCount("Internationalization", options)).toBe(
-    estimateTokenCount("Internationalization", {
+  expect(countText("Internationalization", options)).toBe(
+    countText("Internationalization", {
       profile: "anthropic/claude-sonnet-5.5",
     }),
   );
@@ -109,22 +102,17 @@ it("applies a custom profile multiplier to text APIs without charging request ov
   const options = {
     profile: { contentMultiplier: 2, baseOverhead: 1000, perMessage: 100 },
   };
-  expect(estimateTokenCount("aa bb cc", options)).toBe(6);
-  expect(isWithinTokenLimit("aa bb cc", 5, options)).toBe(false);
-  expect(sliceByTokens("aa bb cc", 0, 2, options)).toBe("aa");
-  expect(splitByTokens("aa bb cc", 2, options)).toEqual(["aa", " bb", " cc"]);
+  expect(countText("aa bb cc", options)).toBe(6);
+  expect(fitsText("aa bb cc", 5, options)).toBe(false);
+  expect(sliceText("aa bb cc", 0, 2, options)).toBe("aa");
+  expect(splitText("aa bb cc", 2, options)).toEqual(["aa", " bb", " cc"]);
 });
 
 it("rejects unknown model IDs from JavaScript callers", () => {
   for (const profile of ["unknown-model", "toString", "__proto__"]) {
     const modelId = profile as ModelId;
     expect(() => createUsageEstimator(modelId)).toThrow(TypeError);
-    expect(() => estimateUsage({ messages: [] }, { profile: modelId })).toThrow(
-      TypeError,
-    );
-    expect(() => estimateTokenCount("Hello", { profile: modelId })).toThrow(
-      TypeError,
-    );
+    expect(() => countText("Hello", { profile: modelId })).toThrow(TypeError);
   }
 });
 
@@ -172,8 +160,8 @@ it("charges encrypted reasoning by payload length and plain reasoning by its tex
     ],
   };
   const parts = [
-    estimateTokenCount("aa bb") * 3,
-    estimateTokenCount("cc dd") * 3 + 40,
+    countText("aa bb") * 3,
+    countText("cc dd") * 3 + 40,
     -5 + 2 * "opaque".length,
     -5 + 2 * "opaque-redacted-data".length,
   ];
