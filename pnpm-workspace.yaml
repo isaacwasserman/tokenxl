@@ -1,3 +1,6 @@
+packages:
+  - packages/*
+
 minimumReleaseAgeExclude:
   - utilful@3.3.0
 

@@ -1,68 +1,27 @@
 {
-  "name": "tokenx",
+  "name": "tokenxl",
+  "private": true,
   "type": "module",
-  "version": "2.1.0",
   "packageManager": "pnpm@11.20.0",
-  "description": "Fast token estimation with 95%+ average accuracy in a 2kB bundle",
-  "author": "Johann Schopplich <hello@johannschopplich.com>",
-  "license": "MIT",
-  "homepage": "https://github.com/johannschopplich/tokenx#readme",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/johannschopplich/tokenx.git"
-  },
-  "bugs": {
-    "url": "https://github.com/johannschopplich/tokenx/issues"
-  },
-  "keywords": [
-    "ai",
-    "cli",
-    "llm",
-    "token",
-    "tokenizer",
-    "estimation",
-    "tiktoken",
-    "anthropic",
-    "openai"
-  ],
-  "sideEffects": false,
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.mts",
-      "default": "./dist/index.mjs"
-    }
-  },
-  "types": "./dist/index.d.mts",
-  "bin": {
-    "tokenx": "bin/tokenx.mjs"
-  },
-  "files": [
-    "bin",
-    "dist"
-  ],
   "scripts": {
-    "build": "tsdown",
-    "dev": "node ./src/cli/entry.ts --help",
-    "bench": "node scripts/generate-bench.ts && automd",
-    "bench:png": "node scripts/render-bench.ts",
-    "lint": "eslint .",
-    "lint:fix": "eslint . --fix",
-    "test": "vitest",
-    "test:types": "tsc --noEmit",
-    "release": "bumpp"
+    "prepare": "git config core.hooksPath .githooks",
+    "build": "pnpm -r build",
+    "benchmark": "pnpm --filter @tokenxl/count benchmark",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "test": "pnpm -r test",
+    "typecheck": "tsc --noEmit",
+    "tune": "pnpm --filter @tokenxl/tune tune",
+    "changeset": "changeset",
+    "version-packages": "changeset version && pnpm install --lockfile-only",
+    "release": "node scripts/publish.ts"
   },
   "devDependencies": {
-    "@antfu/eslint-config": "^9.2.0",
+    "@biomejs/biome": "2.5.15",
+    "@changesets/cli": "^2.30.0",
     "@types/node": "^26.1.2",
-    "ansis": "^4.3.1",
-    "automd": "^0.4.3",
-    "bumpp": "^12.1.1",
-    "eslint": "^10.8.0",
-    "eslint-flat-config-utils": "^3.2.0",
-    "gpt-tokenizer": "^3.4.0",
     "tsdown": "^0.22.14",
     "typescript": "^6.0.3",
-    "utilful": "^3.3.0",
     "vitest": "^4.1.10"
   }
 }

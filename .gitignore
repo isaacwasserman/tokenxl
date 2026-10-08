@@ -1,3 +1,10 @@
 dist
 node_modules
 .DS_Store
+.env*
+
+# Copied from the root README when a package is packed
+packages/*/README.md
+
+# Package files from local publishing
+.packs

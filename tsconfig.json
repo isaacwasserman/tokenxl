@@ -13,6 +13,8 @@
     "isolatedDeclarations": true,
     "verbatimModuleSyntax": true,
     "erasableSyntaxOnly": true,
-    "skipLibCheck": true
-  }
+    "skipLibCheck": true,
+    "customConditions": ["tokenxl-source"]
+  },
+  "exclude": ["**/dist", "**/node_modules"]
 }

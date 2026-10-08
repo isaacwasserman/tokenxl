@@ -1,0 +1,84 @@
+{
+  "name": "@tokenxl/count",
+  "type": "module",
+  "version": "0.0.0",
+  "description": "Fast token estimation for text, AI SDK messages, tool schemas and images",
+  "author": "Isaac Wasserman",
+  "contributors": [
+    "Johann Schopplich <hello@johannschopplich.com> (author of tokenx, which this package is forked from)"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/isaacwasserman/tokenxl.git",
+    "directory": "packages/count"
+  },
+  "homepage": "https://github.com/isaacwasserman/tokenxl/tree/main/packages/count#readme",
+  "bugs": {
+    "url": "https://github.com/isaacwasserman/tokenxl/issues"
+  },
+  "keywords": [
+    "ai",
+    "cli",
+    "llm",
+    "token",
+    "tokenizer",
+    "estimation",
+    "anthropic",
+    "openai"
+  ],
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "tokenxl-source": "./src/index.ts",
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./internal": {
+      "tokenxl-source": "./src/internal.ts",
+      "types": "./dist/internal.d.mts",
+      "default": "./dist/internal.mjs"
+    }
+  },
+  "types": "./dist/index.d.mts",
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "bin": {
+    "tokenxl": "bin/tokenxl.mjs"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "node ./src/cli/entry.ts --help",
+    "benchmark": "node scripts/benchmark.ts",
+    "test": "vitest run",
+    "prepack": "cp ../../README.md README.md"
+  },
+  "peerDependencies": {
+    "ai": "^5.0.0 || ^6.0.0 || ^7.0.0"
+  },
+  "peerDependenciesMeta": {
+    "ai": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "ai": "^7.0.126",
+    "ai-tokenizer": "^1.0.7",
+    "gpt-tokenizer": "^3.4.0",
+    "utilful": "^3.3.0",
+    "zod": "^4.6.5"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

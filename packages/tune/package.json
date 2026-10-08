@@ -1,0 +1,95 @@
+{
+  "name": "@tokenxl/tune",
+  "type": "module",
+  "version": "0.0.0",
+  "description": "Tune @tokenxl/count model profiles against a provider's input-token counts",
+  "author": "Isaac Wasserman",
+  "contributors": [
+    "Johann Schopplich <hello@johannschopplich.com> (author of tokenx, which this package is forked from)"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/isaacwasserman/tokenxl.git",
+    "directory": "packages/tune"
+  },
+  "homepage": "https://github.com/isaacwasserman/tokenxl/tree/main/packages/tune#readme",
+  "bugs": {
+    "url": "https://github.com/isaacwasserman/tokenxl/issues"
+  },
+  "keywords": [
+    "ai",
+    "llm",
+    "token",
+    "tokenizer",
+    "calibration",
+    "anthropic",
+    "openai",
+    "openrouter"
+  ],
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "tokenxl-source": "./src/index.ts",
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./provider-adapters": {
+      "tokenxl-source": "./src/provider-adapters/index.ts",
+      "types": "./dist/provider-adapters.d.mts",
+      "default": "./dist/provider-adapters.mjs"
+    }
+  },
+  "types": "./dist/index.d.mts",
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "files": [
+    "NOTICE",
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "test": "vitest run",
+    "tune": "node --conditions=tokenxl-source --env-file-if-exists=../../.env scripts/tune.ts",
+    "prepack": "cp ../../README.md README.md"
+  },
+  "dependencies": {
+    "@tokenxl/count": "workspace:*"
+  },
+  "peerDependencies": {
+    "@ai-sdk/anthropic": "^4.0.0",
+    "@ai-sdk/openai": "^4.0.0",
+    "@openrouter/ai-sdk-provider": "^3.1.0",
+    "ai": "^5.0.0 || ^6.0.0 || ^7.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@ai-sdk/anthropic": {
+      "optional": true
+    },
+    "@ai-sdk/openai": {
+      "optional": true
+    },
+    "@openrouter/ai-sdk-provider": {
+      "optional": true
+    },
+    "ai": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@ai-sdk/anthropic": "^4.0.73",
+    "@ai-sdk/openai": "^4.0.85",
+    "@openrouter/ai-sdk-provider": "^3.1.0",
+    "ai": "^7.0.126",
+    "zod": "^4.6.5"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

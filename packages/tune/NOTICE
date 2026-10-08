@@ -1,0 +1,25 @@
+tokenx includes a tuning corpus (src/tune/corpus/) with excerpts of the
+following texts. They keep their own licenses; everything else in this
+package is MIT licensed.
+
+- Team chat transcript (en): written for tokenx. MIT.
+- Running-text paragraphs in French, Spanish, Polish, Czech, Russian, and Greek
+  (src/tune/corpus/languages.ts): written for tokenx. MIT.
+- Vite releases API response: GET /repos/vitejs/vite/releases?per_page=10 from
+  the GitHub REST API. Release notes by Vite contributors, MIT.
+- tokenx source code: src/index.ts, src/segments.ts, and src/types.ts of tokenx. MIT.
+- Vite plugin API docs (en): docs/guide/api-plugin.md, https://github.com/vitejs/vite.
+  MIT, VoidZero Inc. and Vite contributors.
+- Cat article (ja): "ネコ", https://ja.wikipedia.org/wiki/ネコ.
+  CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/), Wikipedia contributors.
+- Cat article (ko): "고양이", https://ko.wikipedia.org/wiki/고양이.
+  CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/), Wikipedia contributors.
+- Cat article (zh): "猫", https://zh.wikipedia.org/wiki/猫 (zh-cn variant).
+  CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/), Wikipedia contributors.
+- The Great Gatsby by F. Scott Fitzgerald (1925), Project Gutenberg 64317. Public domain.
+- Die Verwandlung by Franz Kafka (1915), Project Gutenberg 22367. Public domain.
+- Voyage au centre de la Terre by Jules Verne (1864), Project Gutenberg 4791.
+  Public domain.
+
+The Wikipedia excerpts were changed only by removing markup and joining
+wrapped lines; the CC BY-SA 4.0 license applies to those excerpts.

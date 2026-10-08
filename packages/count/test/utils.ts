@@ -1,0 +1,13 @@
+import * as path from "node:path";
+import type { CliHarness } from "utilful/cli/testing";
+import { createCliHarness } from "utilful/cli/testing";
+import { mainCommand } from "../src/cli/index.ts";
+
+export { mockStdin, useTemporaryDirectories } from "utilful/cli/testing";
+
+const harness = createCliHarness(mainCommand, {
+  entry: path.join(import.meta.dirname, "../src/cli/entry.ts"),
+});
+
+export const runCli: CliHarness["runCli"] = harness.runCli;
+export const runCliProcess: CliHarness["runCliProcess"] = harness.runCliProcess;
