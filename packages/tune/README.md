@@ -1,6 +1,6 @@
 # @tokenxl/tune
 
-Tunes [`@tokenxl/count`](../count) model profiles against a provider's input-token counts: text rules, request and tool overhead, images, and encrypted and stored reasoning.
+Tunes [`@tokenxl/count`](https://github.com/isaacwasserman/tokenx/tree/main/packages/count) model profiles against a provider's input-token counts: text rules, request and tool overhead, images, and encrypted and stored reasoning.
 
 ```bash
 pnpm add @tokenxl/count @tokenxl/tune
@@ -82,8 +82,8 @@ The earlier profiles on the full holdout, measured once before any tuning used i
 
 ## Tuning method
 
-See [CONTEXT.md](../../CONTEXT.md#tuning-method) for the staged calibration.
+See [CONTEXT.md](https://github.com/isaacwasserman/tokenx/blob/main/CONTEXT.md#tuning-method) for the staged calibration.
 
 ## License
 
-[MIT](./LICENSE). The tuning corpus keeps the licenses listed in [NOTICE](./NOTICE).
+[MIT](https://github.com/isaacwasserman/tokenx/blob/main/LICENSE). The tuning corpus keeps the licenses listed in [NOTICE](https://github.com/isaacwasserman/tokenx/blob/main/packages/tune/NOTICE).

@@ -4,6 +4,7 @@
   "type": "module",
   "packageManager": "pnpm@11.20.0",
   "scripts": {
+    "prepare": "git config core.hooksPath .githooks",
     "build": "pnpm -r build",
     "benchmark": "pnpm --filter @tokenxl/count benchmark",
     "lint": "biome check .",
@@ -11,12 +12,14 @@
     "test": "pnpm -r test",
     "typecheck": "tsc --noEmit",
     "tune": "pnpm --filter @tokenxl/tune tune",
-    "release": "bumpp -r"
+    "changeset": "changeset",
+    "version-packages": "changeset version && pnpm install --lockfile-only",
+    "release": "node scripts/publish.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
+    "@changesets/cli": "^2.30.0",
     "@types/node": "^26.1.2",
-    "bumpp": "^12.1.1",
     "tsdown": "^0.22.14",
     "typescript": "^6.0.3",
     "vitest": "^4.1.10"

@@ -2,7 +2,7 @@
 
 Fast and lightweight token count estimation without requiring a full tokenizer: text, AI SDK messages, tool schemas, images and reasoning.
 
-A fork of [tokenx](https://github.com/johannschopplich/tokenx) by Johann Schopplich, with model profiles for request overhead. Tune profiles for other models with [`@tokenxl/tune`](../tune).
+A fork of [tokenx](https://github.com/johannschopplich/tokenx) by Johann Schopplich, with model profiles for request overhead. Tune profiles for other models with [`@tokenxl/tune`](https://github.com/isaacwasserman/tokenx/tree/main/packages/tune).
 
 Default text estimates are calibrated against OpenAI's `o200k_base` encoding. Model profiles let you adjust text ratios and request overhead for other LLM families. For precise counts, use a full tokenizer like [`gpt-tokenizer`](https://github.com/niieani/gpt-tokenizer).
 
@@ -144,7 +144,7 @@ console.log(total, breakdown.messages, breakdown.tools.definitions.weather)
 console.log(estimateUsage(input))
 ```
 
-All `ModelProfile` fields are optional and JSON-safe. `resolveProfile(profile)` fills missing fields from `DEFAULT_PROFILE` and missing text rules from `DEFAULT_TEXT_PROFILE`; `estimator.profile` exposes the resolved values. The defaults are model-neutral: the o200k text rules of plain tokenx and approximate request overhead. The example above illustrates custom values; it is not a calibrated profile for a specific model. Automatic tuning is available through [`@tokenxl/tune`](../tune).
+All `ModelProfile` fields are optional and JSON-safe. `resolveProfile(profile)` fills missing fields from `DEFAULT_PROFILE` and missing text rules from `DEFAULT_TEXT_PROFILE`; `estimator.profile` exposes the resolved values. The defaults are model-neutral: the o200k text rules of plain tokenx and approximate request overhead. The example above illustrates custom values; it is not a calibrated profile for a specific model. Automatic tuning is available through [`@tokenxl/tune`](https://github.com/isaacwasserman/tokenx/tree/main/packages/tune).
 
 The estimate is the sum of structural costs and `contentMultiplier × textTokens`, rounded once at the end. The multiplier applies to message text, tool names, descriptions, property names, required names, enum values, and serialized tool-call inputs and JSON results. Each message adds `perMessage`, and system messages additionally add `perSystem`. Tool-call IDs are omitted; their average cost can be absorbed into `perToolCall` and `perToolResult`. Unknown message parts count zero and appear in the breakdown.
 
@@ -188,7 +188,7 @@ The additional schema weights default to zero. Required names now contribute tex
 
 ### Predefined profiles
 
-The [profile registry](src/profiles.json) includes calibrated `anthropic/claude-opus-5.5`, `anthropic/claude-sonnet-4.5`, `anthropic/claude-sonnet-5.5`, `openai/gpt-5.1`, and `openai/gpt-6.1-sol` profiles, keyed as `provider/model` in OpenRouter's naming. The OpenAI profiles use the default text rules with their own measured overheads. Add a model with `pnpm tune` from [`@tokenxl/tune`](../tune). `ModelId` is derived from its keys, so TypeScript accepts only model IDs with a predefined profile.
+The [profile registry](https://github.com/isaacwasserman/tokenx/blob/main/packages/count/src/profiles.json) includes calibrated `anthropic/claude-opus-5.5`, `anthropic/claude-sonnet-4.5`, `anthropic/claude-sonnet-5.5`, `openai/gpt-5.1`, and `openai/gpt-6.1-sol` profiles, keyed as `provider/model` in OpenRouter's naming. The OpenAI profiles use the default text rules with their own measured overheads. Add a model with `pnpm tune` from [`@tokenxl/tune`](https://github.com/isaacwasserman/tokenx/tree/main/packages/tune). `ModelId` is derived from its keys, so TypeScript accepts only model IDs with a predefined profile.
 
 ```ts
 import { createUsageEstimator, estimateTokenCount, estimateUsage, MODEL_PROFILES } from '@tokenxl/count'
@@ -450,4 +450,4 @@ An array of text chunks, each containing approximately `tokensPerChunk` tokens. 
 
 ## License
 
-[MIT](./LICENSE). Copyright (c) 2023-PRESENT Johann Schopplich, and 2026-PRESENT Isaac Wasserman for this fork.
+[MIT](https://github.com/isaacwasserman/tokenx/blob/main/LICENSE). Copyright (c) 2023-PRESENT Johann Schopplich, and 2026-PRESENT Isaac Wasserman for this fork.

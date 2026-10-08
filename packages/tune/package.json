@@ -1,13 +1,22 @@
 {
   "name": "@tokenxl/tune",
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "description": "Tune @tokenxl/count model profiles against a provider's input-token counts",
   "author": "Isaac Wasserman",
   "contributors": [
     "Johann Schopplich <hello@johannschopplich.com> (author of tokenx, which this package is forked from)"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/isaacwasserman/tokenx.git",
+    "directory": "packages/tune"
+  },
+  "homepage": "https://github.com/isaacwasserman/tokenx/tree/main/packages/tune#readme",
+  "bugs": {
+    "url": "https://github.com/isaacwasserman/tokenx/issues"
+  },
   "keywords": [
     "ai",
     "llm",
@@ -32,9 +41,13 @@
     }
   },
   "types": "./dist/index.d.mts",
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
   "files": [
     "NOTICE",
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsdown",
@@ -70,5 +83,12 @@
     "@openrouter/ai-sdk-provider": "^3.1.0",
     "ai": "^7.0.126",
     "zod": "^4.6.5"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }
