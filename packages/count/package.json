@@ -1,7 +1,7 @@
 {
   "name": "@tokenxl/count",
   "type": "module",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Fast token estimation for text, AI SDK messages, tool schemas and images",
   "author": "Isaac Wasserman",
   "contributors": [
