@@ -1,99 +1,24 @@
 {
-  "name": "tokenx",
+  "name": "tokenxl",
+  "private": true,
   "type": "module",
-  "version": "2.1.0",
   "packageManager": "pnpm@11.20.0",
-  "description": "Fast token estimation for text, AI SDK messages and tool schemas",
-  "author": "Johann Schopplich <hello@johannschopplich.com>",
-  "license": "MIT",
-  "homepage": "https://github.com/johannschopplich/tokenx#readme",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/johannschopplich/tokenx.git"
-  },
-  "bugs": {
-    "url": "https://github.com/johannschopplich/tokenx/issues"
-  },
-  "keywords": [
-    "ai",
-    "cli",
-    "llm",
-    "token",
-    "tokenizer",
-    "estimation",
-    "tiktoken",
-    "anthropic",
-    "openai"
-  ],
-  "sideEffects": false,
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.mts",
-      "default": "./dist/index.mjs"
-    },
-    "./tune": {
-      "types": "./dist/tune.d.mts",
-      "default": "./dist/tune.mjs"
-    },
-    "./provider-adapters": {
-      "types": "./dist/provider-adapters.d.mts",
-      "default": "./dist/provider-adapters.mjs"
-    }
-  },
-  "types": "./dist/index.d.mts",
-  "bin": {
-    "tokenx": "bin/tokenx.mjs"
-  },
-  "files": [
-    "NOTICE",
-    "bin",
-    "dist"
-  ],
   "scripts": {
-    "build": "tsdown",
-    "dev": "node ./src/cli/entry.ts --help",
-    "benchmark": "node scripts/benchmark.ts",
+    "build": "pnpm -r build",
+    "benchmark": "pnpm --filter @tokenxl/count benchmark",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "test": "vitest",
+    "test": "pnpm -r test",
     "typecheck": "tsc --noEmit",
-    "tune": "node --env-file-if-exists=.env scripts/tune.ts",
-    "release": "bumpp"
-  },
-  "peerDependencies": {
-    "@ai-sdk/anthropic": "^4.0.0",
-    "@ai-sdk/openai": "^4.0.0",
-    "@openrouter/ai-sdk-provider": "^3.1.0",
-    "ai": "^5.0.0 || ^6.0.0 || ^7.0.0"
-  },
-  "peerDependenciesMeta": {
-    "@ai-sdk/anthropic": {
-      "optional": true
-    },
-    "@ai-sdk/openai": {
-      "optional": true
-    },
-    "@openrouter/ai-sdk-provider": {
-      "optional": true
-    },
-    "ai": {
-      "optional": true
-    }
+    "tune": "pnpm --filter @tokenxl/tune tune",
+    "release": "bumpp -r"
   },
   "devDependencies": {
-    "@ai-sdk/anthropic": "^4.0.73",
-    "@ai-sdk/openai": "^4.0.85",
     "@biomejs/biome": "2.5.15",
-    "@openrouter/ai-sdk-provider": "^3.1.0",
     "@types/node": "^26.1.2",
-    "ai": "^7.0.126",
-    "ai-tokenizer": "^1.0.7",
     "bumpp": "^12.1.1",
-    "gpt-tokenizer": "^3.4.0",
     "tsdown": "^0.22.14",
     "typescript": "^6.0.3",
-    "utilful": "^3.3.0",
-    "vitest": "^4.1.10",
-    "zod": "^4.6.5"
+    "vitest": "^4.1.10"
   }
 }

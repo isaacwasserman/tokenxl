@@ -1,11 +1,11 @@
-# tokenx
+# tokenxl
 
 Heuristic token count estimation for LLM text – trading a few percent of accuracy for near-zero bundle size, no tokenizer data files, and linear speed.
 
 ## Language
 
 **Token**:
-The unit of LLM text measurement that tokenx estimates. Calibrated against the reference tokenizer; every count is an estimate, never exact.
+The unit of LLM text measurement that tokenxl estimates. Calibrated against the reference tokenizer; every count is an estimate, never exact.
 _Avoid_: word, character
 
 **Reference tokenizer**:
@@ -16,7 +16,7 @@ _Avoid_: cl100k_base (legacy), "the tokenizer"
 The atomic unit of estimation – a run of text (word, whitespace, or punctuation) that receives a token count as a whole and is never subdivided during counting.
 
 **Deviation**:
-The relative difference between an estimated count and the reference tokenizer's count for the same text. Positive when tokenx overestimates, negative when it underestimates.
+The relative difference between an estimated count and the reference tokenizer's count for the same text. Positive when tokenxl overestimates, negative when it underestimates.
 _Avoid_: accuracy percentage, error rate
 
 **Sample corpus**:
@@ -58,7 +58,7 @@ A text-profile factor on the unaccented ASCII words of a text whose accented wor
 _Avoid_: language multiplier
 
 **Predefined profiles**:
-The immutable registry in `src/profiles.json`, keyed as `provider/model` in OpenRouter's naming and read by `src/profiles.ts`. `ModelId` comes from the registry keys. `pnpm tune` adds or updates an entry through a provider adapter. Estimation APIs accept these IDs or custom profile objects; omitting a profile uses the existing defaults. Text APIs use the selected text rules and multiplier without structural overhead.
+The immutable registry in `packages/count/src/profiles.json`, keyed as `provider/model` in OpenRouter's naming and read by `packages/count/src/profiles.ts`. `ModelId` comes from the registry keys. `pnpm tune` adds or updates an entry through a provider adapter. Estimation APIs accept these IDs or custom profile objects; omitting a profile uses the existing defaults. Text APIs use the selected text rules and multiplier without structural overhead.
 
 **Feature tally**:
 The unweighted counts of request features and estimated text tokens produced by the usage walker. Its dot product with profile weights gives the unrounded estimate.
@@ -90,7 +90,7 @@ A reasoning part with an encrypted payload (Anthropic `signature` or `redactedDa
 
 ## Tuning method
 
-`tuneProfile` (src/tune/calibrate.ts) runs three fits on the built-in corpus (src/tune/corpus.ts), each with everything fitted earlier locked:
+`tuneProfile` (packages/tune/src/calibrate.ts) runs three fits on the built-in corpus (packages/tune/src/corpus.ts), each with everything fitted earlier locked:
 
 1. **Text.** One-character-word anchors give the multiplier and the single-message intercept. Labeled contrasts measure each ratio and gate (the short-segment gate together with punctuation), including the accent rules on isolated accented words. The unaccented word scales have no contrasts and are fitted on running text only. Natural-text refinement then searches the values where `ceil(length / ratio)` changes (and the scales in steps of 0.01), one field at a time for four rounds, with a penalty on the log distance from its start. It starts from the probe calibration, or from the initial rules when they fit the natural text better: isolated probes miss the merges that an efficient tokenizer such as o200k makes in natural text. Selection documents (authored paragraphs and natural excerpts, because authored text alone is simpler than natural text) choose among the initial rules, the probe calibration and each round. Ratios stay at or above 1 / (UTF-8 bytes per character).
 2. **Overhead.** Every text fragment in the overhead probes is counted alone, so controlled before/after differences isolate the structural costs, which a rank-revealing QR solve fits. Image probes of several sizes and aspect ratios separate the fixed image cost from the patch cost; the solve runs once for each candidate patch size (14, 16, 28, 32, 512 pixels) and keeps the best fit. The resize limits are not measured.

@@ -8,45 +8,61 @@ importers:
 
   .:
     devDependencies:
-      '@ai-sdk/anthropic':
-        specifier: ^4.0.73
-        version: 4.0.73(zod@4.6.5)
-      '@ai-sdk/openai':
-        specifier: ^4.0.85
-        version: 4.0.85(zod@4.6.5)
       '@biomejs/biome':
         specifier: 2.5.15
         version: 2.5.15
-      '@openrouter/ai-sdk-provider':
-        specifier: ^3.1.0
-        version: 3.1.0(ai@7.0.126(zod@4.6.5))(zod@4.6.5)
       '@types/node':
         specifier: ^26.1.2
         version: 26.1.2
-      ai:
-        specifier: ^7.0.126
-        version: 7.0.126(zod@4.6.5)
-      ai-tokenizer:
-        specifier: ^1.0.7
-        version: 1.0.7(ai@7.0.126(zod@4.6.5))
       bumpp:
         specifier: ^12.1.1
         version: 12.1.1
-      gpt-tokenizer:
-        specifier: ^3.4.0
-        version: 3.4.0
       tsdown:
         specifier: ^0.22.14
         version: 0.22.14(typescript@6.0.3)
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
-      utilful:
-        specifier: ^3.3.0
-        version: 3.3.0(vitest@4.1.10(@types/node@26.1.2)(vite@8.2.0(@types/node@26.1.2)(jiti@2.7.0)(yaml@2.9.0)))
       vitest:
         specifier: ^4.1.10
         version: 4.1.10(@types/node@26.1.2)(vite@8.2.0(@types/node@26.1.2)(jiti@2.7.0)(yaml@2.9.0))
+
+  packages/count:
+    devDependencies:
+      ai:
+        specifier: ^7.0.126
+        version: 7.0.126(zod@4.6.5)
+      ai-tokenizer:
+        specifier: ^1.0.7
+        version: 1.0.7(ai@7.0.126(zod@4.6.5))
+      gpt-tokenizer:
+        specifier: ^3.4.0
+        version: 3.4.0
+      utilful:
+        specifier: ^3.3.0
+        version: 3.3.0(vitest@4.1.10(@types/node@26.1.2)(vite@8.2.0(@types/node@26.1.2)(jiti@2.7.0)(yaml@2.9.0)))
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
+
+  packages/tune:
+    dependencies:
+      '@tokenxl/count':
+        specifier: workspace:*
+        version: link:../count
+    devDependencies:
+      '@ai-sdk/anthropic':
+        specifier: ^4.0.73
+        version: 4.0.73(zod@4.6.5)
+      '@ai-sdk/openai':
+        specifier: ^4.0.85
+        version: 4.0.85(zod@4.6.5)
+      '@openrouter/ai-sdk-provider':
+        specifier: ^3.1.0
+        version: 3.1.0(ai@7.0.126(zod@4.6.5))(zod@4.6.5)
+      ai:
+        specifier: ^7.0.126
+        version: 7.0.126(zod@4.6.5)
       zod:
         specifier: ^4.6.5
         version: 4.6.5
