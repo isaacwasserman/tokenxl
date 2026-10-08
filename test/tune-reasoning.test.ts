@@ -335,3 +335,35 @@ it("keeps the initial reasoning costs when the model does not reason", async () 
     resolveProfile().perReasoningPayloadChar,
   );
 });
+
+it("fits stored OpenAI reasoning costs from the generated items' payloads and summaries", async () => {
+  let calls = 0;
+  const result = await tune({
+    countTokens: count,
+    // Odd responses summarize in `n` one-token words and hide 3 tokens per
+    // summary token; even responses have no summary and hide 50 tokens.
+    invokeModel: modelWith(() => {
+      const n = ++calls;
+      const summarized = n % 2 === 1;
+      return [
+        {
+          type: "reasoning",
+          text: summarized ? Array(n).fill("word").join(" ") : "",
+          providerOptions: {
+            openai: {
+              itemId: `rs_${n}`,
+              reasoningEncryptedContent: "x".repeat(
+                40 + (summarized ? 6 * n : 100),
+              ),
+            },
+          },
+        },
+      ];
+    }),
+  });
+  const { storedReasoning } = result.report.reasoning!;
+  expect(storedReasoning.summarized).toBeGreaterThan(0);
+  expect(storedReasoning.items).toBeGreaterThan(storedReasoning.summarized);
+  expect(result.profile.storedReasoningSummaryScale).toBeCloseTo(3, 3);
+  expect(result.profile.perStoredReasoning).toBeCloseTo(50, 3);
+});

@@ -1,5 +1,6 @@
 import { selectProfile } from "./profiles.ts";
 import type {
+  AccentLanguageId,
   LanguageConfig,
   LanguageId,
   TextProfile,
@@ -42,8 +43,11 @@ for (let code = 0x61; code <= 0x7a; code++)
 
 /** A text profile with every field set. */
 export type ResolvedTextProfile = Required<
-  Omit<TextProfile, "languageCharsPerToken">
-> & { languageCharsPerToken: Record<LanguageId, number> };
+  Omit<TextProfile, "languageCharsPerToken" | "unaccentedWordScale">
+> & {
+  languageCharsPerToken: Record<LanguageId, number>;
+  unaccentedWordScale: Record<AccentLanguageId, number>;
+};
 
 /** The built-in text rules, calibrated against OpenAI's o200k_base encoding. */
 export const DEFAULT_TEXT_PROFILE: Readonly<ResolvedTextProfile> =
@@ -54,6 +58,7 @@ export const DEFAULT_TEXT_PROFILE: Readonly<ResolvedTextProfile> =
     digitsPerToken: 3,
     shortTokenThreshold: 3,
     lowercaseWordMaxLength: 8,
+    innerUnderscoreTokens: 0,
     hanziCharsPerToken: 1.15,
     kanaCharsPerToken: 1.4,
     hangulCharsPerToken: 1.65,
@@ -65,6 +70,11 @@ export const DEFAULT_TEXT_PROFILE: Readonly<ResolvedTextProfile> =
       greek: 3,
       emoji: 0.9,
     }),
+    unaccentedWordScale: Object.freeze({
+      german: 1,
+      romance: 1,
+      slavicLatin: 1,
+    }),
   });
 
 /** Every field of a text profile. */
@@ -74,7 +84,8 @@ export const TEXT_PROFILE_FIELDS = Object.keys(
 
 /**
  * Fills every missing text field from `DEFAULT_TEXT_PROFILE`. Later profiles
- * override earlier ones field by field, and language ratios merge one level deep.
+ * override earlier ones field by field, and language ratios and scales merge
+ * one level deep.
  */
 export function resolveTextProfile(
   ...profiles: (TextProfile | undefined)[]
@@ -82,23 +93,28 @@ export function resolveTextProfile(
   const resolved = {
     ...DEFAULT_TEXT_PROFILE,
     languageCharsPerToken: { ...DEFAULT_TEXT_PROFILE.languageCharsPerToken },
+    unaccentedWordScale: { ...DEFAULT_TEXT_PROFILE.unaccentedWordScale },
   } as ResolvedTextProfile;
   for (const profile of profiles) {
     for (const field of TEXT_PROFILE_FIELDS) {
       const value = profile?.[field];
       if (value === undefined) continue;
-      if (field !== "languageCharsPerToken") resolved[field] = value as number;
+      if (field !== "languageCharsPerToken" && field !== "unaccentedWordScale")
+        resolved[field] = value as number;
       else
-        for (const [id, ratio] of Object.entries(value as object))
-          if (ratio !== undefined)
-            resolved.languageCharsPerToken[id as LanguageId] = ratio;
+        for (const [id, number] of Object.entries(value as object))
+          if (number !== undefined)
+            (resolved[field] as Record<string, number>)[id] = number;
     }
   }
   return resolved;
 }
 
-const { languageCharsPerToken: DEFAULT_LANGUAGE_RATIOS, ...DEFAULT_RATIOS } =
-  DEFAULT_TEXT_PROFILE;
+const {
+  languageCharsPerToken: DEFAULT_LANGUAGE_RATIOS,
+  unaccentedWordScale: _defaultScales,
+  ...DEFAULT_RATIOS
+} = DEFAULT_TEXT_PROFILE;
 
 interface DefaultLanguageConfig extends LanguageConfig {
   id: LanguageId;
@@ -152,11 +168,16 @@ export interface SegmentEstimate {
 
 /** Text options with every default filled in. Resolve once and reuse for repeated estimates. */
 export interface ResolvedTokenEstimationOptions
-  extends Omit<ResolvedTextProfile, "languageCharsPerToken"> {
+  extends Omit<
+    ResolvedTextProfile,
+    "languageCharsPerToken" | "unaccentedWordScale"
+  > {
   contentMultiplier: number;
   languageConfigs: LanguageConfig[];
   /** Set when every language config needs a non-ASCII character to match. */
   languageConfigsNeedNonAscii: boolean;
+  /** The scales of unaccented words, in `ACCENT_LANGUAGES` order; absent when all are 1. */
+  unaccentedWordScale?: readonly number[];
   /** Estimates of the words that need the slow path, which repeat often in running text. */
   segmentCache?: Map<string, number>;
 }
@@ -189,10 +210,9 @@ export function resolveTokenEstimationOptions(
   }
 
   // Direct options override the profile's text rules, which override the defaults.
-  const { languageCharsPerToken, ...ratios } = resolveTextProfile(
-    profile?.text,
-    options,
-  );
+  const { languageCharsPerToken, unaccentedWordScale, ...ratios } =
+    resolveTextProfile(profile?.text, options);
+  const scales = ACCENT_LANGUAGES.map((id) => unaccentedWordScale[id]);
   return {
     contentMultiplier: profile?.contentMultiplier ?? 1,
     ...ratios,
@@ -205,6 +225,11 @@ export function resolveTokenEstimationOptions(
       })),
     // Custom configs carry no guarantee that they need a non-ASCII character.
     languageConfigsNeedNonAscii: options.languageConfigs === undefined,
+    // The scales belong to the built-in accent rules.
+    ...(options.languageConfigs === undefined &&
+    scales.some((scale) => scale !== 1)
+      ? { unaccentedWordScale: scales }
+      : {}),
     segmentCache: options.cache === false ? undefined : new Map(),
   };
 }
@@ -254,10 +279,12 @@ class SegmentScanner {
   private previousIsPunctuation = false;
   private readonly text: string;
   private readonly options: ResolvedTokenEstimationOptions;
+  private readonly wordScale: number;
 
   constructor(text: string, options: ResolvedTokenEstimationOptions) {
     this.text = text;
     this.options = options;
+    this.wordScale = getUnaccentedWordScale(text, options);
   }
 
   next(): boolean {
@@ -300,9 +327,11 @@ class SegmentScanner {
       )
         index++;
 
-      this.tokenCount = options.languageConfigsNeedNonAscii
-        ? estimatePunctuationRunTokens(index - this.start, options)
-        : estimateSegmentTokens(text.slice(this.start, index), true, options);
+      this.tokenCount = isInnerUnderscore(text, this.start, index)
+        ? options.innerUnderscoreTokens
+        : options.languageConfigsNeedNonAscii
+          ? estimatePunctuationRunTokens(index - this.start, options)
+          : estimateSegmentTokens(text.slice(this.start, index), true, options);
       this.previousIsPunctuation = true;
     } else {
       let hasNonAscii = false;
@@ -330,13 +359,97 @@ class SegmentScanner {
               isNumeric,
               isLowercase,
               options,
-            );
+            ) * (isNumeric ? 1 : this.wordScale);
       this.previousIsPunctuation = false;
     }
 
     this.end = index;
     return true;
   }
+}
+
+/** The built-in accent rules, in the order of their scales. */
+export const ACCENT_LANGUAGES: readonly AccentLanguageId[] = [
+  "german",
+  "romance",
+  "slavicLatin",
+];
+
+// Natural German, French, Spanish and Polish prose has 10–15% accented words
+// or more; English with a few loanwords has less than 1%. From this share up,
+// the scale of a language applies in full.
+const FULL_SCALE_ACCENT_SHARE = 0.05;
+
+// A word segment: a run of characters that are not whitespace or punctuation.
+const WORD_PATTERN = /[^\s.,!?;(){}[\]<>:/\\|@#$%^&*+=`~_"-]+/g;
+
+/**
+ * The weight of each accent language in a text, in `ACCENT_LANGUAGES` order:
+ * the share of its words that the accent rule matches, divided by
+ * `FULL_SCALE_ACCENT_SHARE` and capped at 1. Shares count unaccented ASCII
+ * words and words that an accent rule matches.
+ */
+export function measureAccentWeights(text: string): number[] {
+  const matches = [0, 0, 0];
+  if (!PATTERNS.nonAscii.test(text)) return matches;
+  let words = 0;
+  for (const [word] of text.matchAll(WORD_PATTERN)) {
+    if (!PATTERNS.nonAscii.test(word)) {
+      if (!PATTERNS.numeric.test(word)) words++;
+      continue;
+    }
+    const config = DEFAULT_LANGUAGE_CONFIGS.find(
+      (candidate) => word.search(candidate.pattern) !== -1,
+    );
+    const index = config
+      ? ACCENT_LANGUAGES.indexOf(config.id as AccentLanguageId)
+      : -1;
+    if (index === -1) continue;
+    matches[index]!++;
+    words++;
+  }
+  return matches.map((count) =>
+    Math.min(1, count / words / FULL_SCALE_ACCENT_SHARE),
+  );
+}
+
+/** The factor of the unaccented ASCII words in a text. */
+function getUnaccentedWordScale(
+  text: string,
+  options: ResolvedTokenEstimationOptions,
+): number {
+  const scales = options.unaccentedWordScale;
+  if (!scales || !PATTERNS.nonAscii.test(text)) return 1;
+  const weights = measureAccentWeights(text);
+  let scale = 1;
+  for (let index = 0; index < scales.length; index++)
+    scale += weights[index]! * (scales[index]! - 1);
+  return scale;
+}
+
+const UNDERSCORE = 0x5f;
+
+/**
+ * Whether the run from `start` to `end` is one underscore between a word and
+ * a letter, as in `snake_case`. Before a digit, o200k keeps it apart.
+ */
+export function isInnerUnderscore(
+  text: string,
+  start: number,
+  end: number,
+): boolean {
+  if (
+    end - start !== 1 ||
+    text.charCodeAt(start) !== UNDERSCORE ||
+    start === 0 ||
+    end >= text.length ||
+    getCharacterClass(text.charCodeAt(start - 1)) !== WORD
+  )
+    return false;
+  const next = text.charCodeAt(end);
+  return next >= 128
+    ? getCharacterClass(next) === WORD
+    : (ASCII_CHARACTER_CLASSES[next]! & (DIGIT_FLAG | CLASS_MASK)) === WORD;
 }
 
 export function getCharacterClass(code: number): number {

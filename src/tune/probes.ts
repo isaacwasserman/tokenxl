@@ -4,6 +4,109 @@ import type { UsageInput } from "../usage/types.ts";
 import type { TextField } from "./text.ts";
 import { ALL_TEXT_FIELDS, buildHistogram } from "./text.ts";
 
+/**
+ * A valid black-and-white PNG of the given size as a data URL. Stored deflate
+ * blocks need no compression library; providers price images by size only.
+ */
+export function createProbeImage(width: number, height: number): string {
+  const row = 1 + Math.ceil(width / 8);
+  const raw = new Uint8Array(row * height);
+  // Alternate rows of black and white, after each row's filter byte.
+  for (let y = 0; y < height; y++)
+    if (y % 2) raw.fill(0xff, y * row + 1, (y + 1) * row);
+  const blocks = Math.max(1, Math.ceil(raw.length / 65_535));
+  const deflate = new Uint8Array(2 + raw.length + 5 * blocks + 4);
+  deflate.set([0x78, 0x01]);
+  let offset = 2;
+  for (let block = 0; block < blocks; block++) {
+    const part = raw.subarray(block * 65_535, (block + 1) * 65_535);
+    deflate.set(
+      [
+        block === blocks - 1 ? 1 : 0,
+        part.length & 0xff,
+        part.length >> 8,
+        ~part.length & 0xff,
+        (~part.length >> 8) & 0xff,
+      ],
+      offset,
+    );
+    deflate.set(part, offset + 5);
+    offset += 5 + part.length;
+  }
+  let a = 1;
+  let b = 0;
+  for (const byte of raw) {
+    a = (a + byte) % 65_521;
+    b = (b + a) % 65_521;
+  }
+  setUint32(deflate, offset, ((b << 16) | a) >>> 0);
+  const header = new Uint8Array(13);
+  setUint32(header, 0, width);
+  setUint32(header, 4, height);
+  header.set([1, 0, 0, 0, 0], 8);
+  const bytes = concat([
+    new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", header),
+    chunk("IDAT", deflate),
+    chunk("IEND", new Uint8Array()),
+  ]);
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 0x8000)
+    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  return `data:image/png;base64,${btoa(binary)}`;
+}
+
+function setUint32(target: Uint8Array, offset: number, value: number): void {
+  target.set(
+    [value >>> 24, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff],
+    offset,
+  );
+}
+
+function concat(parts: Uint8Array[]): Uint8Array {
+  const result = new Uint8Array(
+    parts.reduce((sum, part) => sum + part.length, 0),
+  );
+  let offset = 0;
+  for (const part of parts) {
+    result.set(part, offset);
+    offset += part.length;
+  }
+  return result;
+}
+
+const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  return c >>> 0;
+});
+
+function chunk(type: string, data: Uint8Array): Uint8Array {
+  const result = new Uint8Array(12 + data.length);
+  setUint32(result, 0, data.length);
+  for (let index = 0; index < 4; index++)
+    result[4 + index] = type.charCodeAt(index);
+  result.set(data, 8);
+  let crc = 0xffffffff;
+  for (const byte of result.subarray(4, 8 + data.length))
+    crc = CRC_TABLE[(crc ^ byte) & 0xff]! ^ (crc >>> 8);
+  setUint32(result, 8 + data.length, (crc ^ 0xffffffff) >>> 0);
+  return result;
+}
+
+// Image sizes for the patch probes: several aspect ratios, edges that are not
+// multiples of common patch sizes, and below the resize limits of the
+// measured providers, so the probes measure patches without resizing.
+const PROBE_IMAGE_SIZES: readonly [number, number][] = [
+  [64, 64],
+  [200, 120],
+  [120, 200],
+  [333, 250],
+  [500, 90],
+  [700, 520],
+  [1000, 740],
+];
+
 // Valid, small media fixtures so a ground-truth counter can inspect their data.
 const PROBE_IMAGE =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC";
@@ -79,18 +182,6 @@ interface ProbeOptions {
   /** Approximate payload lengths in code points; defaults to 64, 256, and 1024. */
   lengths?: readonly number[];
 }
-
-/**
- * An accent rule prices a whole language through the minority of its words
- * that carry an accent, so its ratio also covers the unaccented words. Isolated
- * accented words would measure something else; these ratios are fitted on
- * running text only.
- */
-const RUNNING_TEXT_FIELDS: ReadonlySet<TextField> = new Set([
-  "german",
-  "romance",
-  "slavicLatin",
-]);
 
 /** Controlled contrasts rather than random combinations of request features. */
 export function createProbes(options: ProbeOptions = {}): Probes {
@@ -193,8 +284,14 @@ export function createProbes(options: ProbeOptions = {}): Probes {
       q: { type: "string", enum: ["brief", "detailed"] },
     });
     add(first, twoEnum);
-    add(first, withProperties({ q: empty }));
-    add(first, withProperties({ q: { type: "array", items: empty } }));
+    // Nested objects have properties in real schemas; some providers render
+    // the first nested property more cheaply than a first root property.
+    const inner: JSONSchema7 = {
+      ...empty,
+      properties: { q: { type: "string" } },
+    };
+    add(first, withProperties({ q: inner }));
+    add(first, withProperties({ q: { type: "array", items: inner } }));
     // Each new schema term has a contrast that keeps existing features fixed.
     add(oneTool, {
       ...control,
@@ -205,6 +302,40 @@ export function createProbes(options: ProbeOptions = {}): Probes {
       tools: createTools([{ ...empty, additionalProperties: true }]),
     });
     add(first, withProperties({ q: { type: "integer" } }));
+    add(first, withProperties({ q: { type: ["string", "null"] } }));
+    add(
+      first,
+      withProperties({
+        q: { anyOf: [{ type: "string" }, { type: "number" }] },
+      }),
+    );
+    // Annotation keywords: the first of a node, then a further one.
+    const formatted = withProperties({
+      q: { type: "string", format: "date" },
+    });
+    add(first, formatted);
+    add(
+      formatted,
+      withProperties({ q: { type: "string", format: "date", maxLength: 10 } }),
+    );
+    add(
+      second,
+      withProperties({
+        q: { type: "string" },
+        limit: { type: "number", minimum: 1, maximum: 50 },
+      }),
+    );
+    // A schema-valued keyword renders like `true`, beside properties.
+    add(first, {
+      ...control,
+      tools: createTools([
+        {
+          type: "object",
+          properties: { q: { type: "string" } },
+          additionalProperties: { type: "string" },
+        },
+      ]),
+    });
     add(first, withProperties({ q: { type: "boolean" } }));
     add(
       first,
@@ -232,8 +363,20 @@ export function createProbes(options: ProbeOptions = {}): Probes {
     add(second, withRequired([]));
     add(second, requiredOne);
     add(requiredOne, withRequired(["q", "limit"]));
+    // Patches separate from the fixed image cost only across image sizes.
+    const images =
+      content === "a"
+        ? PROBE_IMAGE_SIZES.map(([width, height]) =>
+            createProbeImage(width, height),
+          )
+        : [];
     for (const part of [
       { type: "file" as const, data: PROBE_IMAGE, mediaType: "image/png" },
+      ...images.map((data) => ({
+        type: "file" as const,
+        data,
+        mediaType: "image/png",
+      })),
       { type: "file" as const, data: PROBE_FILE, mediaType: "application/pdf" },
     ]) {
       add(control, {
@@ -272,6 +415,70 @@ export function createProbes(options: ProbeOptions = {}): Probes {
     // Counters that reject assistant prefills can drop the unfinished pair.
     add(oneTool, called);
     add(oneTool, completed);
+    // Two calls in one message can cost more than two separate exchanges.
+    const result = (toolCallId: string) => ({
+      type: "tool-result" as const,
+      toolCallId,
+      toolName: "a",
+      output: { type: "text" as const, value: content },
+    });
+    const twoCalls = (together: boolean): UsageInput => {
+      const call = (toolCallId: string) => ({
+        type: "tool-call" as const,
+        toolCallId,
+        toolName: "a",
+        input: {},
+      });
+      return {
+        ...oneTool,
+        messages: together
+          ? [
+              control.messages[0]!,
+              { role: "assistant", content: [call("call_1"), call("call_2")] },
+              { role: "tool", content: [result("call_1"), result("call_2")] },
+            ]
+          : [
+              control.messages[0]!,
+              { role: "assistant", content: [call("call_1")] },
+              { role: "tool", content: [result("call_1")] },
+              { role: "assistant", content: [call("call_2")] },
+              { role: "tool", content: [result("call_2")] },
+            ],
+      };
+    };
+    add(twoCalls(false), twoCalls(true));
+    // An image in a tool result can cost more than one in a user message.
+    // Results with a text and an image are the common case.
+    const withResult = (value: unknown[]): UsageInput => ({
+      ...completed,
+      messages: completed.messages.map((message) =>
+        message.role === "tool"
+          ? ({
+              role: "tool",
+              content: [
+                {
+                  type: "tool-result",
+                  toolCallId: "call_1",
+                  toolName: "a",
+                  output: { type: "content", value },
+                },
+              ],
+            } as ModelMessage)
+          : message,
+      ),
+    });
+    const resultText = { type: "text", text: content };
+    add(
+      withResult([resultText]),
+      withResult([
+        resultText,
+        {
+          type: "image-data",
+          data: PROBE_IMAGE.slice(PROBE_IMAGE.indexOf(",") + 1),
+          mediaType: "image/png",
+        },
+      ]),
+    );
     add(exchange, {
       messages: [
         control.messages[0]!,
@@ -376,7 +583,9 @@ function createTextRuleProbes(
   const probes: TextRuleProbe[] = [];
   for (const field of ALL_TEXT_FIELDS) {
     const words = [...buckets.get(field)!];
-    if (!words.length || RUNNING_TEXT_FIELDS.has(field)) continue;
+    // The scales of unaccented words get no segments: they are fitted on
+    // running text only.
+    if (!words.length) continue;
     // Different lexical sets, not merely longer repetitions of one mixture.
     const groups = Array.from({ length: Math.min(3, words.length) }, (_, n) =>
       words.filter((_, k) => k % Math.min(3, words.length) === n),
@@ -410,6 +619,25 @@ function createTextRuleProbes(
         });
       }
     }
+  }
+  // The same lowercase words joined by spaces and then by underscores: only
+  // the underscores change.
+  const lowercase = [...buckets.get("lowercaseWordMaxLength")!]
+    .filter((word) => word.length <= 6)
+    .slice(0, 24);
+  for (const count of [4, 12, 24]) {
+    const words = Array.from(
+      { length: count },
+      (_, n) =>
+        (lowercase.length ? lowercase : ["file", "name"])[
+          n % Math.max(1, lowercase.length)
+        ]!,
+    );
+    probes.push({
+      field: "innerUnderscoreTokens",
+      before: createRequest(words.join(" ")),
+      after: createRequest(words.join("_")),
+    });
   }
   // A mixture of natural punctuation lengths can hide the gate: two ratios
   // may fit its aggregate count while disagreeing on a three-character run.

@@ -93,18 +93,16 @@ const sliceCodePoints = (text: string, start: number, length: number): string =>
   [...text].slice(start, start + length).join("");
 
 function buildCorpus(): TuningCorpus {
-  // Nonoverlapping excerpts of each document: the first 4,096 code points calibrate,
-  // the next 4,096 validate, so validation requests never enter the tuner.
-  const calibrationTexts = DOCUMENTS.flatMap(({ text }) =>
-    [0, 2_048]
-      .map((start) => sliceCodePoints(text, start, 2_048))
-      .filter(Boolean),
-  );
-  const validationTexts = DOCUMENTS.flatMap(({ text }) =>
-    [4_096, 6_144]
-      .map((start) => sliceCodePoints(text, start, 2_048))
-      .filter(Boolean),
-  );
+  // Nonoverlapping excerpts of each document: the first 4,096 code points
+  // calibrate, the next 2,048 select among the text refinement rounds, and the
+  // last 2,048 validate, so validation requests never enter the tuner.
+  const excerpts = (starts: number[]): string[] =>
+    DOCUMENTS.flatMap(({ text }) =>
+      starts
+        .map((start) => sliceCodePoints(text, start, 2_048))
+        .filter(Boolean),
+    );
+  const calibrationTexts = excerpts([0, 2_048]);
   return {
     probes: createProbes({
       texts: calibrationTexts,
@@ -116,12 +114,18 @@ function buildCorpus(): TuningCorpus {
     ].flatMap((text) =>
       [...new Set([text, sliceCodePoints(text, 0, 512)])].map(createRequest),
     ),
-    textSelectionSamples: TEXT_SELECTION_DOCUMENTS.flatMap((document) =>
-      [...new Set([document.text, sliceCodePoints(document.text, 0, 256)])].map(
-        createRequest,
-      ),
-    ),
-    validationSamples: validationTexts.flatMap(createRequestVariants),
+    // Authored documents alone are simpler than natural text, so natural
+    // excerpts also take part in the selection.
+    textSelectionSamples: [
+      ...TEXT_SELECTION_DOCUMENTS.flatMap((document) => [
+        document.text,
+        sliceCodePoints(document.text, 0, 256),
+      ]),
+      ...excerpts([4_096]),
+    ]
+      .filter((text, index, texts) => texts.indexOf(text) === index)
+      .map(createRequest),
+    validationSamples: excerpts([6_144]).flatMap(createRequestVariants),
   };
 }
 

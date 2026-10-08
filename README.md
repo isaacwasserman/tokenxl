@@ -160,20 +160,29 @@ The estimate is the sum of structural costs and `contentMultiplier × textTokens
 | `perEnumValue` | 0 | Each enum member, in addition to `perEnum` and its text; const uses only `perEnum` |
 | `perRequired` / `perRequiredProp` | 0 / 0 | Each present `required` array, including empty arrays / each required name, plus its text |
 | `perAdditionalProperties` | 0 | Each explicit `additionalProperties` keyword |
-| `perAdditionalPropertiesTrue` | 0 | Each `additionalProperties: true`, in addition to `perAdditionalProperties` |
+| `perAdditionalPropertiesTrue` | 0 | Each `additionalProperties` that is `true` or a schema, in addition to `perAdditionalProperties` |
+| `perUnionMember` / `perUnionBranch` | 0 / 0 | Each type after the first in a type list, and each `nullable: true` / each `anyOf` or `oneOf` branch after the first |
+| `perSchemaKeyword` / `perAdditionalSchemaKeyword` | 0 / 0 | The first / each further annotation keyword of a schema node (`format`, `pattern`, `minimum`, `maxLength`, `default`, `title`, `examples` and similar), including its value |
 | `perInteger` / `perBoolean` | 0 / 0 | Each schema node with an integer / boolean type |
 | `perArrayOfPrimitives` | 0 | Each primitive array item schema, including union branches |
 | `perNestedObject` / `perArrayOfObjects` | -3 / 1 | Object properties / object array items |
 | `perToolCall` / `perToolResult` | 0 / 0 | Each call / result part |
-| `perImage` / `perFile` | 85 / 100 | Each image / file part |
+| `perParallelToolCalls` | 0 | Each message with two or more tool calls |
+| `perImage` / `perFile` | 85 / 100 | Each image / file part; with `perImagePatch`, the fixed cost of an image besides its patches |
+| `perImagePatch` | 0 | Each patch of an image after the provider resizes it |
+| `perToolResultImage` | 0 | Each image in a tool result, in addition to its image cost |
+| `imagePatchSize` | 28 | The edge of an image patch, in pixels |
+| `imageMaxEdge` / `imageMaxShortEdge` / `imageMaxPatches` | 0 / 0 / 0 | The longest edge, longest short edge, and most patches the provider keeps; 0 is no limit |
 | `perReasoning` | 0 | Each reasoning part without an encrypted payload, plus its text |
 | `perReasoningPayloadChar` | 0.43 | Each character of an encrypted reasoning payload after its envelope; the summary text is not counted |
 | `reasoningPayloadEnvelopeChars` | 0 | Characters at the start of each payload that cost nothing (the encryption envelope) |
 | `countReasoningInPreviousTurns` | `true` | Whether encrypted reasoning before the last user message is counted; `false` for models that drop it |
+| `perStoredReasoning` | 173 | Each stored OpenAI reasoning item without summary text |
+| `storedReasoningSummaryScale` | 2.3 | Each estimated token of the summary text of a stored OpenAI reasoning item |
 
-Image and file costs are fixed estimates independent of dimensions, file length or binary data. Generic file parts with an image media type, including AI SDK v7 `mediaType: 'image'`, use `perImage`. Inline file text supported by the SDK is counted as text in addition to the file cost. Set these costs to fit your model and typical media inputs.
+An image costs `perImage + perImagePatch × patches`. The estimator reads the width and height from the header of PNG, GIF, WebP and JPEG data (bytes, base64, data URLs, or AI SDK 7 tagged data). It scales the image down to fit `imageMaxEdge` and `imageMaxShortEdge`, then steps the long edge down until the image has at most `imageMaxPatches` patches, and counts `ceil(width / imagePatchSize) × ceil(height / imagePatchSize)` patches. An image of unknown size, such as a URL, counts as 1024 × 1024 pixels. With the default `perImagePatch: 0`, every image costs `perImage`. The OpenAI `detail` setting is not read; the estimates assume the default detail. Generic file parts with an image media type, including AI SDK v7 `mediaType: 'image'`, are images. File costs are fixed estimates independent of file length; inline file text supported by the SDK is counted as text in addition to the file cost.
 
-The seven additional schema weights default to zero. Required names now contribute text even with zero weights; retune existing profiles that were calibrated with required schemas. Controlled probes distinguish list framing from per-entry costs, enum framing from cardinality, keyword presence from omission, and scalar array items from object items.
+The additional schema weights default to zero. Required names now contribute text even with zero weights; retune existing profiles that were calibrated with required schemas. Controlled probes distinguish list framing from per-entry costs, enum framing from cardinality, keyword presence from omission, and scalar array items from object items.
 
 ### Predefined profiles
 
@@ -200,7 +209,16 @@ reasoning part with an encrypted payload = perReasoningPayloadChar * (payload le
 other reasoning part                     = perReasoning + its text
 ```
 
-The envelope is the part of every payload that holds no thinking. Reasoning before the last user message belongs to an earlier turn; some models charge it in full (`countReasoningInPreviousTurns: true`: Claude Sonnet 5.5, GPT-6.1 Sol) and others drop it (`false`: Claude Sonnet 4.5, GPT-5.1). OpenAI reasoning parts that share an `itemId` are charged once. Stored OpenAI items (the AI SDK default `store: true`) are sent as references without a payload and are underestimated. The costs belong to the model, not to the reasoning level, and the defaults are an upper bound of the measured models, so a request without a profile overestimates reasoning.
+The envelope is the part of every payload that holds no thinking. Reasoning before the last user message belongs to an earlier turn; some models charge it in full (`countReasoningInPreviousTurns: true`: Claude Sonnet 5.5, GPT-6.1 Sol) and others drop it (`false`: Claude Sonnet 4.5, GPT-5.1). OpenAI reasoning parts that share an `itemId` are charged once. The costs belong to the model, not to the reasoning level, and the defaults are an upper bound of the measured models, so a request without a profile overestimates reasoning.
+
+Stored OpenAI items (the AI SDK default `store: true`) have an `itemId` and no encrypted content. The AI SDK sends them as references, and the provider charges the hidden reasoning (its reasoning tokens + 2), whose length the messages do not hold. The summaries are the best clue:
+
+```text
+stored item with summary text    = storedReasoningSummaryScale * estimated summary tokens
+stored item without summary text = perStoredReasoning
+```
+
+Over many items the total is about right (aggregate error 0% on 150 measured items), but one item can be off by half or more, because the summary length varies with the hidden length only loosely. A stored item that also has `reasoningEncryptedContent` is estimated from its payload.
 
 ### Text ratios
 
@@ -225,8 +243,14 @@ const estimator = createUsageEstimator({
 | `digitsPerToken` | 3 |
 | `shortTokenThreshold` | 3 |
 | `lowercaseWordMaxLength` | 8 |
+| `innerUnderscoreTokens` | 0 |
 | `hanziCharsPerToken` / `kanaCharsPerToken` / `hangulCharsPerToken` | 1.15 / 1.4 / 1.65 |
 | `languageCharsPerToken` | german: 3, romance: 4.5, slavicLatin: 2.5, cyrillic: 6, greek: 3, emoji: 0.9 |
+| `unaccentedWordScale` | german: 1, romance: 1, slavicLatin: 1 |
+
+`innerUnderscoreTokens` prices a single underscore between a word and a letter, as in `snake_case` names. o200k joins it to the next word (0); Claude tokenizers charge about one token.
+
+`unaccentedWordScale` scales the unaccented ASCII words of a text in German, a Romance language, or a Slavic language in Latin script. A tokenizer that splits these words more than English words needs a scale above 1. The language of a text comes from its accented words: when the accent rule of a language matches 5% or more of the words, its scale applies in full; below 5%, in proportion. Natural German and French prose has 10–15% accented words. Each text (each message text, tool description, and so on) gets its own scale.
 
 Use positive, finite ratios and nonnegative integer thresholds. Custom `languageConfigs` on the text APIs replace the built-in language rules and take precedence over `languageCharsPerToken`. Profiles use the JSON-safe named language ratios.
 
@@ -262,13 +286,14 @@ To measure speed against gpt-tokenizer and ai-tokenizer, run `pnpm benchmark`.
 ## Tune a model profile
 
 ```sh
-pnpm tune --provider <anthropic|openai|openrouter> --model <id> [--write] [--profile]
+pnpm tune --provider <anthropic|openai|openrouter> --model <id> [--write] [--profile] [--no-reasoning]
 ```
 
-`pnpm tune` measures a model and prints its entry for `src/profiles.json`; `--write` adds or replaces it there, and `--profile` prints the time and cost of each phase. API keys come from `.env` (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`).
+`pnpm tune` measures a model and prints its entry for `src/profiles.json`; `--write` adds or replaces it there, `--profile` prints the time and cost of each phase, and `--no-reasoning` generates nothing and keeps the reasoning costs the entry already has. API keys come from `.env` (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`).
 
 - **What it measures:** text rules and request overhead from token counts, which are free on Anthropic and OpenAI; OpenRouter has no count endpoint, so each count is a billed 1-token generation. Reasoning costs come from at most 10 generations at `high` effort, each capped at 4,096 output tokens (about $0.05–0.15 per run). A model without effort levels, such as Claude Sonnet 4.5, keeps the reasoning costs it already has.
 - **Key:** `provider/model`, with dated snapshot suffixes removed and version separators written as dots (`claude-sonnet-4-5-20250929` becomes `anthropic/claude-sonnet-4.5`).
+- **Images:** controlled probes with images of several sizes and aspect ratios measure `perImage`, `perImagePatch`, `perToolResultImage`, and choose `imagePatchSize` from 14, 16, 28, 32 and 512 pixels. The probes are smaller than every measured resize limit, so the limits (`imageMaxEdge`, `imageMaxShortEdge`, `imageMaxPatches`) come from `initial` or the provider's documentation.
 - **Entry:** the tuned profile, without `text` when the default text rules predicted held-out documents better than the tuned ones.
 
 The same tuner is a library:
@@ -295,9 +320,22 @@ The built-in adapters use the AI SDK: Anthropic and OpenAI through `@ai-sdk/anth
 | `openai/gpt-5.1` | defaults | 0.2196 / 1209.6 | `false` |
 | `openai/gpt-6.1-sol` | defaults | 0.1641 / 1121.3 | `true` |
 
-Claude Sonnet 5.5 was retuned on 2026-10-07 with `pnpm tune`. The other reasoning costs were measured per level before they became one value per model: GPT-6.1 Sol uses its fit over all levels, GPT-5.1 the mean of its low, medium and high fits, Claude Sonnet 4.5 its 4,096-token thinking budget, and Claude Opus 5.5 all 60 saved histories at medium. The OpenAI profiles keep the default text rules, which generalized better than a tuned set.
+All five profiles were retuned on 2026-10-08 with `pnpm tune --no-reasoning`, so their text rules, overheads and image costs come from the current tuner and their reasoning costs are unchanged. The reasoning costs were measured per level before they became one value per model: Claude Sonnet 5.5 was tuned on 2026-10-07 at high effort, GPT-6.1 Sol uses its fit over all levels, GPT-5.1 the mean of its low, medium and high fits, Claude Sonnet 4.5 its 4,096-token thinking budget, and Claude Opus 5.5 all 60 saved histories at medium. The stored-reasoning costs of the OpenAI profiles (GPT-6.1 Sol 173 / 1.38, GPT-5.1 118 / 2.3) come from 150 stored items at all levels, and the image resize limits from 1,237 measured images. The OpenAI profiles keep the default text rules, which generalized better than a tuned set.
 
-Holdout, measured once on data no tuning used, with the earlier per-level reasoning costs (mean absolute error / aggregate error against each provider's count):
+The 2026-10-08 retune against the earlier profiles, on the request holdout below (mean absolute error / aggregate error). These requests also guided changes to the tuner, so they are no longer a clean holdout:
+
+| Request set | Model | Before | After |
+| --- | --- | ---: | ---: |
+| Documents and chat (72) | Claude Sonnet 5.5 | 4.5% / +2.4% | 4.0% / +3.1% |
+| Tool definitions and calls (18) | Claude Sonnet 5.5 | 3.2% / −0.5% | 3.0% / +1.9% |
+| Documents and chat (72) | Claude Opus 5.5 | 6.3% / +2.2% | 4.0% / +3.1% |
+| Tool definitions and calls (18) | Claude Opus 5.5 | 3.3% / −1.7% | 3.0% / +1.9% |
+| Documents and chat (72) | Claude Sonnet 4.5 | 6.7% / +2.3% | 3.7% / +2.3% |
+| Tool definitions and calls (18) | Claude Sonnet 4.5 | 2.2% / −1.7% | 1.4% / +0.6% |
+| Documents and chat (72) | GPT-6.1 Sol, GPT-5.1 | 5.0% / −0.7% | 4.6% / −1.3% |
+| Tool definitions and calls (18) | GPT-6.1 Sol, GPT-5.1 | 4.0% / +1.9% | 2.3% / +2.0% |
+
+The earlier profiles on the full holdout, measured once before any tuning used it, with the earlier per-level reasoning costs (mean absolute error / aggregate error against each provider's count):
 
 | Request set | Model | tokenx 2.1.0 | ai-tokenizer 1.0.7 | This profile |
 | --- | --- | ---: | ---: | ---: |

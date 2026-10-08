@@ -9,6 +9,7 @@ import {
   resolveTokenEstimationOptions,
 } from "./segments.ts";
 import type { TextProfile } from "./types.ts";
+import type { ImageGeometry } from "./usage/images.ts";
 
 /**
  * The overhead and scale factors of one model. All fields are optional;
@@ -45,8 +46,29 @@ export interface ModelProfile {
   perToolCall?: number;
   /** Tokens added for each tool result part. */
   perToolResult?: number;
-  /** Tokens for each image, independent of its size. */
+  /** Tokens added once for each message with two or more tool call parts. */
+  perParallelToolCalls?: number;
+  /**
+   * Tokens for each image: its whole cost, or with `perImagePatch` the fixed
+   * cost besides its patches.
+   */
   perImage?: number;
+  /**
+   * Tokens for each patch of an image after the provider resizes it. Sizes
+   * are read from PNG, GIF, WebP and JPEG data; an image of unknown size, such
+   * as a URL, counts as 1024 × 1024 pixels.
+   */
+  perImagePatch?: number;
+  /** Extra tokens for each image in a tool result. */
+  perToolResultImage?: number;
+  /** The edge of an image patch, in pixels. */
+  imagePatchSize?: number;
+  /** The longest image edge the provider keeps, in pixels; larger images are scaled down. 0 is no limit. */
+  imageMaxEdge?: number;
+  /** The longest short edge the provider keeps, in pixels. 0 is no limit. */
+  imageMaxShortEdge?: number;
+  /** The most patches the provider keeps; larger images are scaled down. 0 is no limit. */
+  imageMaxPatches?: number;
   /** Tokens for each file, independent of its size. */
   perFile?: number;
   /** Tokens added for each reasoning part without an encrypted payload; its text also counts. */
@@ -59,8 +81,22 @@ export interface ModelProfile {
   perRequiredProp?: number;
   /** Tokens added for each explicit additionalProperties keyword. */
   perAdditionalProperties?: number;
-  /** Extra tokens for each `additionalProperties: true`, which some providers render as an open index signature. */
+  /**
+   * Extra tokens for each `additionalProperties` that is `true` or a schema,
+   * which some providers render as an open index signature.
+   */
   perAdditionalPropertiesTrue?: number;
+  /** Tokens for each type beyond the first in a type list, and for `nullable: true`. */
+  perUnionMember?: number;
+  /** Tokens for each `anyOf` or `oneOf` branch beyond the first; the branches are also walked as schemas. */
+  perUnionBranch?: number;
+  /**
+   * Tokens for the first annotation keyword of a schema node, such as
+   * `format`, `minimum`, `pattern`, `default` or `title`, with its value.
+   */
+  perSchemaKeyword?: number;
+  /** Tokens for each further annotation keyword of the same schema node. */
+  perAdditionalSchemaKeyword?: number;
   /** Extra tokens for each schema node with an integer type. */
   perInteger?: number;
   /** Extra tokens for each schema node with a boolean type. */
@@ -85,11 +121,26 @@ export interface ModelProfile {
    * the last user message). Some models drop it, so it costs nothing.
    */
   countReasoningInPreviousTurns?: boolean;
+  /**
+   * Tokens for a stored OpenAI reasoning item (`store: true`) without summary
+   * text. The AI SDK sends a stored item as a reference without its encrypted
+   * payload, so its hidden length is unknown; this is the mean.
+   */
+  perStoredReasoning?: number;
+  /**
+   * Tokens for each estimated token of the summary text of a stored OpenAI
+   * reasoning item. The hidden reasoning replaces the summary, which is not
+   * counted as text.
+   */
+  storedReasoningSummaryScale?: number;
   /** Ratios of the text rules. */
   text?: TextProfile;
 }
 
-/** The numeric fields; each is a weight in the tally. */
+/** The image geometry fields, which turn an image size into patches. */
+export type ImageGeometryField = keyof ImageGeometry;
+
+/** The numeric fields; each except the image geometry is a weight in the tally. */
 export type ProfileField = Exclude<
   keyof ModelProfile,
   "text" | "countReasoningInPreviousTurns"
@@ -121,7 +172,14 @@ export const DEFAULT_PROFILE: Readonly<Required<Omit<ModelProfile, "text">>> =
     perArrayOfObjects: 1,
     perToolCall: 0,
     perToolResult: 0,
+    perParallelToolCalls: 0,
     perImage: 85,
+    perImagePatch: 0,
+    perToolResultImage: 0,
+    imagePatchSize: 28,
+    imageMaxEdge: 0,
+    imageMaxShortEdge: 0,
+    imageMaxPatches: 0,
     perFile: 100,
     perReasoning: 0,
     perEnumValue: 0,
@@ -132,11 +190,18 @@ export const DEFAULT_PROFILE: Readonly<Required<Omit<ModelProfile, "text">>> =
     perBoolean: 0,
     perArrayOfPrimitives: 0,
     perAdditionalPropertiesTrue: 0,
+    perUnionMember: 0,
+    perUnionBranch: 0,
+    perSchemaKeyword: 0,
+    perAdditionalSchemaKeyword: 0,
     // An upper bound for every measured model: the highest cost per character,
     // no envelope, and previous turns counted. Without a profile, overestimate.
     perReasoningPayloadChar: 0.43,
     reasoningPayloadEnvelopeChars: 0,
     countReasoningInPreviousTurns: true,
+    // The higher of the measured GPT-6.1 Sol and GPT-5.1 values.
+    perStoredReasoning: 173,
+    storedReasoningSummaryScale: 2.3,
   });
 
 /** Merges a partial profile with `DEFAULT_PROFILE` and its text rules with `DEFAULT_TEXT_PROFILE`. */
@@ -160,6 +225,9 @@ type FeatureField = Exclude<
   | "contentMultiplier"
   | "perReasoningPayloadChar"
   | "reasoningPayloadEnvelopeChars"
+  | "perStoredReasoning"
+  | "storedReasoningSummaryScale"
+  | ImageGeometryField
 >;
 
 export const FEATURE_FIELDS: readonly FeatureField[] = [
@@ -177,7 +245,10 @@ export const FEATURE_FIELDS: readonly FeatureField[] = [
   "perArrayOfObjects",
   "perToolCall",
   "perToolResult",
+  "perParallelToolCalls",
   "perImage",
+  "perImagePatch",
+  "perToolResultImage",
   "perFile",
   "perReasoning",
   "perEnumValue",
@@ -188,16 +259,24 @@ export const FEATURE_FIELDS: readonly FeatureField[] = [
   "perBoolean",
   "perArrayOfPrimitives",
   "perAdditionalPropertiesTrue",
+  "perUnionMember",
+  "perUnionBranch",
+  "perSchemaKeyword",
+  "perAdditionalSchemaKeyword",
 ];
 
-// Reasoning payload blocks and characters, in the current turn and in previous
-// turns, follow the field slots. Their weights come from the payload fields,
-// not from one field each.
+// Reasoning payload blocks and characters, and stored reasoning items and
+// summary tokens, in the current turn and in previous turns, follow the field
+// slots. Their weights come from the reasoning fields, not from one field each.
 const PAYLOAD_SLOTS = [
   "reasoningPayloads",
   "reasoningPayloadChars",
   "previousReasoningPayloads",
   "previousReasoningPayloadChars",
+  "storedReasoning",
+  "storedReasoningSummaryTokens",
+  "previousStoredReasoning",
+  "previousStoredReasoningSummaryTokens",
   "textTokens",
 ] as const;
 
@@ -216,6 +295,7 @@ export interface CompiledProfile {
   profile: ResolvedModelProfile;
   weights: Float64Array;
   text: ResolvedTokenEstimationOptions;
+  images: ImageGeometry;
   /** Token estimates of whole strings, when caching is enabled. */
   textCache?: Map<string, number>;
 }
@@ -236,12 +316,25 @@ export function compileProfile(
   weights[Feature.reasoningPayloadChars] = perChar;
   weights[Feature.previousReasoningPayloads] = previous * perBlock;
   weights[Feature.previousReasoningPayloadChars] = previous * perChar;
+  weights[Feature.storedReasoning] = resolved.perStoredReasoning;
+  weights[Feature.storedReasoningSummaryTokens] =
+    resolved.storedReasoningSummaryScale;
+  weights[Feature.previousStoredReasoning] =
+    previous * resolved.perStoredReasoning;
+  weights[Feature.previousStoredReasoningSummaryTokens] =
+    previous * resolved.storedReasoningSummaryScale;
   weights[Feature.textTokens] = resolved.contentMultiplier;
 
   return {
     profile: resolved,
     weights,
     text: resolveTokenEstimationOptions({ ...resolved.text, cache }),
+    images: {
+      imagePatchSize: resolved.imagePatchSize,
+      imageMaxEdge: resolved.imageMaxEdge,
+      imageMaxShortEdge: resolved.imageMaxShortEdge,
+      imageMaxPatches: resolved.imageMaxPatches,
+    },
     ...(cache ? { textCache: new Map() } : {}),
   };
 }

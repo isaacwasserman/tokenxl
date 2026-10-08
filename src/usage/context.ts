@@ -1,6 +1,7 @@
 import { Feature } from "../profile.ts";
 import type { ResolvedTokenEstimationOptions } from "../segments.ts";
 import { countTextTokens } from "../segments.ts";
+import type { ImageGeometry } from "./images.ts";
 
 /**
  * The state of one walk. The walker only counts features into `tally`; the
@@ -10,6 +11,7 @@ export interface WalkContext {
   tally: Float64Array;
   weights: Float64Array;
   text: ResolvedTokenEstimationOptions;
+  images: ImageGeometry;
   /** Token estimates of whole strings, when caching is enabled. */
   textCache?: Map<string, number>;
   /** Internal extraction hook that supplies the count without rescanning text. */
@@ -18,14 +20,21 @@ export interface WalkContext {
   priorTurn?: boolean;
   /** Encrypted reasoning, and stored OpenAI items, already charged in this request. */
   sentReasoning?: Set<string>;
+  /** Stored OpenAI reasoning items of the current message that have summary text. */
+  summarizedItems?: Set<string>;
 }
 
-export function addText(context: WalkContext, text: string | undefined): void {
+/** Adds the estimated tokens of a text to the text slot, or to another slot. */
+export function addText(
+  context: WalkContext,
+  text: string | undefined,
+  slot: number = Feature.textTokens,
+): void {
   if (!text) return;
 
   if (context.onText) {
     const tokens = context.onText(text);
-    context.tally[Feature.textTokens]! += tokens;
+    context.tally[slot]! += tokens;
     return;
   }
 
@@ -33,7 +42,7 @@ export function addText(context: WalkContext, text: string | undefined): void {
   // Conversation prefixes are repeated on every turn. Cache short strings
   // per estimator, bounded to at most 256 × 4096 UTF-16 code units.
   if (!cache || text.length > 4096) {
-    context.tally[Feature.textTokens]! += countTextTokens(text, context.text);
+    context.tally[slot]! += countTextTokens(text, context.text);
     return;
   }
   let tokens = cache.get(text);
@@ -42,7 +51,7 @@ export function addText(context: WalkContext, text: string | undefined): void {
     if (cache.size >= 256) cache.clear();
     cache.set(text, tokens);
   }
-  context.tally[Feature.textTokens]! += tokens;
+  context.tally[slot]! += tokens;
 }
 
 export function addJson(context: WalkContext, value: unknown): void {

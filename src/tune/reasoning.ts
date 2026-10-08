@@ -1,6 +1,7 @@
 import type { ModelMessage, ToolSet } from "ai";
 import type { ResolvedModelProfile } from "../profile.ts";
 import { compileProfile, Feature } from "../profile.ts";
+import { countTextTokens } from "../segments.ts";
 import { carriesReasoningPayload } from "../usage/messages.ts";
 import type { UsageInput } from "../usage/types.ts";
 import type { CollectionOptions, Sample } from "./collect.ts";
@@ -289,6 +290,79 @@ export async function fitReasoning(
     },
     counterCalls: measured.counterCalls,
     metrics: reportErrors(measured.pairs, initial, profile),
+  };
+}
+
+/**
+ * The costs of stored OpenAI reasoning items, which the AI SDK sends as
+ * references without their payload. The fitted payload cost of each generated
+ * OpenAI item is its hidden reasoning; the summary scale is the ratio of the
+ * total hidden cost to the total estimated summary tokens, and the cost of an
+ * item without summary is the mean. Fields without items keep their values.
+ */
+export function fitStoredReasoning(
+  histories: readonly UsageInput[],
+  profile: ResolvedModelProfile,
+): {
+  profile: ResolvedModelProfile;
+  items: number;
+  summarized: number;
+} {
+  const text = compileProfile(profile, false).text;
+  // Later histories repeat earlier items; a set keeps each summary once.
+  const items = new Map<string, { payload: number; summaries: Set<string> }>();
+  for (const history of histories)
+    for (const message of history.messages) {
+      if (!Array.isArray(message.content)) continue;
+      for (const part of message.content as {
+        type: string;
+        text?: string;
+        providerOptions?: {
+          openai?: { itemId?: unknown; reasoningEncryptedContent?: unknown };
+        };
+      }[]) {
+        const openai = part.providerOptions?.openai;
+        if (
+          part.type !== "reasoning" ||
+          typeof openai?.itemId !== "string" ||
+          typeof openai.reasoningEncryptedContent !== "string"
+        )
+          continue;
+        const item = items.get(openai.itemId) ?? {
+          payload: openai.reasoningEncryptedContent.length,
+          summaries: new Set(),
+        };
+        if (part.text) item.summaries.add(part.text);
+        items.set(openai.itemId, item);
+      }
+    }
+  let cost = 0;
+  let tokens = 0;
+  let emptyCost = 0;
+  let empty = 0;
+  for (const { payload, summaries } of items.values()) {
+    const hidden =
+      profile.perReasoningPayloadChar *
+      Math.max(0, payload - profile.reasoningPayloadEnvelopeChars);
+    let summaryTokens = 0;
+    for (const summary of summaries)
+      summaryTokens += countTextTokens(summary, text);
+    if (summaryTokens > 0) {
+      cost += hidden;
+      tokens += summaryTokens;
+    } else {
+      emptyCost += hidden;
+      empty++;
+    }
+  }
+  return {
+    profile: {
+      ...profile,
+      ...(tokens > 0 ? { storedReasoningSummaryScale: cost / tokens } : {}),
+      ...(empty > 0 ? { perStoredReasoning: emptyCost / empty } : {}),
+    },
+    items: items.size,
+    summarized: items.size - empty,
   };
 }
 

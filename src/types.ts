@@ -9,6 +9,9 @@ export type LanguageId =
   | "greek"
   | "emoji";
 
+/** The language configs that identify a Latin-script language by its accented words. */
+export type AccentLanguageId = "german" | "romance" | "slavicLatin";
+
 /** The JSON-safe ratios of the text rules. Every field is optional and falls back to the built-in o200k calibration. */
 export interface TextProfile {
   /** Default average characters per token when no language-specific rule applies (default: 7). */
@@ -21,6 +24,11 @@ export interface TextProfile {
   shortTokenThreshold?: number;
   /** Lowercase ASCII words of this length or shorter count as one token (default: 8). */
   lowercaseWordMaxLength?: number;
+  /**
+   * Tokens for a single underscore between two words, as in `snake_case`
+   * (default: 0, because o200k joins it to the next word).
+   */
+  innerUnderscoreTokens?: number;
   /** Characters per token for Chinese characters (default: 1.15). */
   hanziCharsPerToken?: number;
   /** Characters per token for Japanese kana (default: 1.4). */
@@ -29,6 +37,12 @@ export interface TextProfile {
   hangulCharsPerToken?: number;
   /** Ratios that replace the ratios of the built-in language configs. Ignored when `languageConfigs` is set. */
   languageCharsPerToken?: Partial<Record<LanguageId, number>>;
+  /**
+   * Scales the unaccented ASCII words of a text in which the accent rule of
+   * this language matches at least 5% of the words (default: 1). Below 5%,
+   * the scale applies in proportion. Ignored when `languageConfigs` is set.
+   */
+  unaccentedWordScale?: Partial<Record<AccentLanguageId, number>>;
 }
 
 export interface TokenEstimationOptions extends TextProfile {

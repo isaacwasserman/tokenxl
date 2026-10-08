@@ -13,6 +13,28 @@ import type {
 // Stops a walk through pathologically deep schemas.
 const MAX_SCHEMA_DEPTH = 64;
 
+// Keywords that annotate or constrain a value; providers render them with it.
+// Their values are short in practice, so their weights cover them.
+const ANNOTATION_KEYWORDS = [
+  "title",
+  "default",
+  "examples",
+  "format",
+  "pattern",
+  "minimum",
+  "maximum",
+  "exclusiveMinimum",
+  "exclusiveMaximum",
+  "multipleOf",
+  "minLength",
+  "maxLength",
+  "minItems",
+  "maxItems",
+  "uniqueItems",
+  "minProperties",
+  "maxProperties",
+] as const;
+
 type SchemaNode = Record<string, unknown>;
 
 /** The cost of one tool without its name, which comes from the tool set key. */
@@ -365,6 +387,27 @@ class SchemaWalker {
     if (detail) detail.description += tallyValue(context) - start;
 
     start = detail ? tallyValue(context) : 0;
+    // A union renders each further member, such as `| null`.
+    if (Array.isArray(node.type) && node.type.length > 1)
+      tally[Feature.perUnionMember]! += node.type.length - 1;
+    if (node.nullable === true) tally[Feature.perUnionMember]!++;
+    for (const combinator of ["anyOf", "oneOf"] as const) {
+      const branches = node[combinator];
+      if (Array.isArray(branches) && branches.length > 1)
+        tally[Feature.perUnionBranch]! += branches.length - 1;
+    }
+    let keywords = 0;
+    for (const keyword of ANNOTATION_KEYWORDS) {
+      if (node[keyword] === undefined) continue;
+      tally[
+        keywords++
+          ? Feature.perAdditionalSchemaKeyword
+          : Feature.perSchemaKeyword
+      ]!++;
+    }
+    if (detail) detail.overhead += tallyValue(context) - start;
+
+    start = detail ? tallyValue(context) : 0;
     if (Array.isArray(node.enum)) {
       tally[Feature.perEnum]!++;
       tally[Feature.perEnumValue]! += node.enum.length;
@@ -429,7 +472,10 @@ class SchemaWalker {
     const { context } = this;
     if (node.additionalProperties !== undefined)
       context.tally[Feature.perAdditionalProperties]!++;
-    if (node.additionalProperties === true)
+    if (
+      node.additionalProperties === true ||
+      isSchemaNode(node.additionalProperties)
+    )
       context.tally[Feature.perAdditionalPropertiesTrue]!++;
     if (hasType(node, "integer")) context.tally[Feature.perInteger]!++;
     if (hasType(node, "boolean")) context.tally[Feature.perBoolean]!++;

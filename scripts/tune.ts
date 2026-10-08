@@ -1,11 +1,12 @@
 // Tunes a model through its provider and prints its registry entry; --write adds it to src/profiles.json.
 //
-//   pnpm tune --provider <anthropic|openai|openrouter> --model <id> [--write] [--profile]
+//   pnpm tune --provider <anthropic|openai|openrouter> --model <id> [--write] [--profile] [--no-reasoning]
 //
 // Reasoning costs come from up to 10 billed responses at high effort. The costs
 // do not depend on the reasoning level, so the script turns reasoning up to
 // make sure the model reasons. A model that OpenRouter's public list shows
-// without effort levels keeps the reasoning costs it already has. The script
+// without effort levels keeps the reasoning costs it already has; so does
+// every model with --no-reasoning, which generates nothing. The script
 // writes no files except
 // src/profiles.json with --write. With --profile, it prints the time and the
 // spend at OpenRouter's list prices of each phase.
@@ -38,14 +39,16 @@ const { values } = parseArgs({
     write: { type: "boolean", default: false },
     concurrency: { type: "string", default: "16" },
     profile: { type: "boolean", default: false },
+    reasoning: { type: "boolean", default: true },
   },
+  allowNegative: true,
   strict: true,
 });
 const provider = values.provider as ProviderName | undefined;
 const modelId = values.model;
 if (!provider || !PROVIDER_NAMES.includes(provider) || !modelId) {
   log(
-    `Usage: pnpm tune --provider <${PROVIDER_NAMES.join("|")}> --model <id> [--write] [--profile]`,
+    `Usage: pnpm tune --provider <${PROVIDER_NAMES.join("|")}> --model <id> [--write] [--profile] [--no-reasoning]`,
   );
   process.exit(2);
 }
@@ -64,13 +67,24 @@ const REASONING_FIELDS = [
   "perReasoningPayloadChar",
   "reasoningPayloadEnvelopeChars",
   "countReasoningInPreviousTurns",
+  "perStoredReasoning",
+  "storedReasoningSummaryScale",
+] as const;
+// The image probes are smaller than every resize limit, so the limits are not measured.
+const IMAGE_LIMIT_FIELDS = [
+  "imageMaxEdge",
+  "imageMaxShortEdge",
+  "imageMaxPatches",
 ] as const;
 
 try {
   // Models without effort levels cannot be asked to reason through the adapters.
-  const listed = await fetchListedModel(key).catch(() => undefined);
+  const listed = values.reasoning
+    ? await fetchListedModel(key).catch(() => undefined)
+    : undefined;
   const measureReasoning =
-    !listed || Boolean(listed.reasoning?.supported_efforts?.length);
+    values.reasoning &&
+    (!listed || Boolean(listed.reasoning?.supported_efforts?.length));
   const { invokeModel, ...counting } = createProviderAdapter(provider, {
     apiKey,
     modelId,
@@ -79,7 +93,7 @@ try {
   log(
     measureReasoning
       ? `Tuning ${key} through ${provider}, generating at high effort.`
-      : `Tuning ${key} through ${provider}. OpenRouter lists no effort levels for it, so its reasoning costs are kept, not measured.`,
+      : `Tuning ${key} through ${provider}. ${values.reasoning ? "OpenRouter lists no effort levels for it, so its" : "Its"} reasoning costs are kept, not measured.`,
   );
   const result = await tuneProfile({
     ...counting,
@@ -112,6 +126,8 @@ try {
     JSON.stringify(text) === JSON.stringify(DEFAULT_TEXT_PROFILE)
       ? costs
       : { ...costs, text };
+  for (const field of IMAGE_LIMIT_FIELDS)
+    if (existing?.[field] !== undefined) entry[field] = existing[field];
   if (!report.reasoning) {
     // Unmeasured reasoning costs keep their earlier values; without any, the defaults apply.
     for (const field of REASONING_FIELDS) {

@@ -1,5 +1,10 @@
 import type { ResolvedModelProfile } from "../profile.ts";
-import { compileProfile, FEATURE_FIELDS, resolveProfile } from "../profile.ts";
+import {
+  compileProfile,
+  FEATURE_FIELDS,
+  Feature,
+  resolveProfile,
+} from "../profile.ts";
 import { tallyUsage } from "../usage/estimator.ts";
 import type { UsageInput } from "../usage/types.ts";
 import type { Collected, CollectionOptions, Sample } from "./collect.ts";
@@ -8,6 +13,7 @@ import { tuningCorpus } from "./corpus.ts";
 import { measureErrors, solveLeastSquares } from "./fit.ts";
 import {
   fitReasoning,
+  fitStoredReasoning,
   generateHistories,
   REASONING_INVOCATIONS,
 } from "./reasoning.ts";
@@ -228,14 +234,48 @@ export async function tuneProfile(options: TuneOptions): Promise<TuneResult> {
     overheadInputs,
     locked,
   );
-  const contrasts = probes.overhead.map((_, index) => ({
-    before: overheadData.samples[overheadData.inputIndices[index * 2]!]!,
-    after: overheadData.samples[overheadData.inputIndices[index * 2 + 1]!]!,
-    beforeText: measuredText[index * 2]!,
-    afterText: measuredText[index * 2 + 1]!,
-  }));
   const overheadFitStart = performance.now();
-  const fitted = fitOverhead(contrasts, locked, options.signal);
+  // The patch size changes the patch counts, not the samples: fit each
+  // candidate size and keep the one whose contrasts fit best.
+  const sampleInputs: UsageInput[] = [];
+  overheadData.inputIndices.forEach((sample, index) => {
+    sampleInputs[sample] = overheadInputs[index]!;
+  });
+  let fitted: ReturnType<typeof fitOverhead> | undefined;
+  let fittedSamples = overheadData.samples;
+  for (const imagePatchSize of new Set([
+    locked.imagePatchSize,
+    ...IMAGE_PATCH_SIZES,
+  ])) {
+    const geometry = compileProfile({ ...locked, imagePatchSize });
+    const samples = overheadData.samples.map((sample, index) => {
+      const tally = sample.tally.slice();
+      tally[Feature.perImagePatch] = tallyUsage(
+        sampleInputs[index]!,
+        geometry,
+        {},
+        () => 0,
+      )[Feature.perImagePatch]!;
+      return { ...sample, tally };
+    });
+    const candidate = fitOverhead(
+      probes.overhead.map((_, index) => ({
+        before: samples[overheadData.inputIndices[index * 2]!]!,
+        after: samples[overheadData.inputIndices[index * 2 + 1]!]!,
+        beforeText: measuredText[index * 2]!,
+        afterText: measuredText[index * 2 + 1]!,
+      })),
+      { ...locked, imagePatchSize },
+      options.signal,
+    );
+    if (!fitted || candidate.contrasts.rmse < fitted.contrasts.rmse - 1e-9) {
+      fitted = candidate;
+      fittedSamples = samples;
+    }
+    // Without patch probes, every size fits equally.
+    if (samples.every((sample) => !sample.tally[Feature.perImagePatch])) break;
+  }
+  fitted = fitted!;
   recordPhase("overhead", "fit", overheadFitStart);
   options.onProgress?.({ stage: "overhead", phase: "fit" });
   options.signal?.throwIfAborted();
@@ -273,7 +313,11 @@ export async function tuneProfile(options: TuneOptions): Promise<TuneResult> {
     recordPhase("reasoning", "fit", fitStart);
     options.onProgress?.({ stage: "reasoning", phase: "fit" });
     options.signal?.throwIfAborted();
-    profile = fit.profile;
+    // Stored items are estimated from the payload costs just fitted.
+    const stored = fit.reason
+      ? undefined
+      : fitStoredReasoning(histories, fit.profile);
+    profile = stored?.profile ?? fit.profile;
     reasoning = {
       invocations,
       counterCalls: fit.counterCalls,
@@ -283,6 +327,12 @@ export async function tuneProfile(options: TuneOptions): Promise<TuneResult> {
       perReasoningPayloadChar: fit.profile.perReasoningPayloadChar,
       reasoningPayloadEnvelopeChars: fit.profile.reasoningPayloadEnvelopeChars,
       countReasoningInPreviousTurns: fit.profile.countReasoningInPreviousTurns,
+      storedReasoning: {
+        items: stored?.items ?? 0,
+        summarized: stored?.summarized ?? 0,
+        perStoredReasoning: profile.perStoredReasoning,
+        storedReasoningSummaryScale: profile.storedReasoningSummaryScale,
+      },
       metrics: fit.metrics,
     };
   }
@@ -299,6 +349,12 @@ export async function tuneProfile(options: TuneOptions): Promise<TuneResult> {
       identifiable: !reason,
       ...(reason ? { reason } : {}),
     };
+  });
+  fields.push({
+    field: "imagePatchSize",
+    initial: initial.imagePatchSize,
+    final: profile.imagePatchSize,
+    identifiable: !fitted.reasons.has(Feature.perImagePatch),
   });
   fields.push({
     field: "contentMultiplier",
@@ -340,7 +396,7 @@ export async function tuneProfile(options: TuneOptions): Promise<TuneResult> {
         rank: FEATURE_FIELDS.length - fitted.reasons.size,
         contrasts: fitted.contrasts,
         before: measureErrors(overheadData.samples, initial),
-        after: measureErrors(overheadData.samples, fitted.profile),
+        after: measureErrors(fittedSamples, fitted.profile),
       },
       reasoning,
       validation: validationData
@@ -354,6 +410,10 @@ export async function tuneProfile(options: TuneOptions): Promise<TuneResult> {
   };
 }
 
+// Patch edges of measured providers, in pixels: 28 (Anthropic), 32 (OpenAI
+// patch models), 512 (OpenAI tile models), and common vision encoder patches.
+const IMAGE_PATCH_SIZES = [14, 16, 28, 32, 512];
+
 /**
  * Remove numerical noise from fitted costs: snap near-integers, and keep four
  * decimals otherwise. Text ratios keep full precision, because a rounded ratio
@@ -366,6 +426,8 @@ function roundCosts(profile: ResolvedModelProfile): ResolvedModelProfile {
     ...FEATURE_FIELDS,
     "perReasoningPayloadChar",
     "reasoningPayloadEnvelopeChars",
+    "perStoredReasoning",
+    "storedReasoningSummaryScale",
   ] as const) {
     const value = profile[field];
     const integer = Math.round(value);

@@ -513,11 +513,11 @@ describe("heuristic calibration", () => {
 
     it("prices Markdown documents", () => {
       expect(measureBucket(BUCKETS.markdown)).toMatchInlineSnapshot(`
-        "medium  76 → 82    +7.9%  # Getting started\\n\\nInstall the package:\\n\\n…
+        "medium  76 → 81    +6.6%  # Getting started\\n\\nInstall the package:\\n\\n…
         medium  93 → 92    -1.1%  ## Plugin ordering\\n\\nA Vite plugin can addit…
         medium  71 → 72    +1.4%  ### Conditional application\\n\\nBy default plu…
-        mean               +2.7%
-        mean |dev|          3.5%"
+        mean               +2.3%
+        mean |dev|          3.0%"
       `);
     });
   });

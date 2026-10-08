@@ -7,8 +7,8 @@ import {
   ALL_TEXT_FIELDS,
   containsTextField,
   estimateHistogramTokens,
+  getTextFieldName,
   getTextValue,
-  LANGUAGES,
   resolveTextRules,
   setTextValue,
 } from "./text.ts";
@@ -57,6 +57,8 @@ export function fitTextRules(
     });
     let penalty = 0;
     for (const field of active) {
+      // A few discrete values, from 0: no penalty.
+      if (field === "innerUnderscoreTokens") continue;
       if (field === "shortTokenThreshold" || field === "lowercaseWordMaxLength")
         penalty +=
           10 *
@@ -67,7 +69,7 @@ export function fitTextRules(
         penalty +=
           Math.log(getTextValue(text, field) / getTextValue(start, field)) ** 2;
     }
-    return loss / samples.length + 1e-6 * penalty;
+    return loss / samples.length + 1e-3 * penalty;
   }
 
   for (const field of active) {
@@ -107,7 +109,7 @@ export function reportTextFields(
       containsTextField(sample.text, field),
     );
     return {
-      field: `text.${LANGUAGES.includes(field as (typeof LANGUAGES)[number]) ? `languageCharsPerToken.${field}` : field}`,
+      field: getTextFieldName(field),
       initial: getTextValue(start, field),
       final: getTextValue(end, field),
       identifiable: supported,

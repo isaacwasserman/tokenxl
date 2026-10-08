@@ -6,8 +6,8 @@ import type { ResolvedText, Rule, TextField } from "./text.ts";
 import {
   ALL_TEXT_FIELDS,
   estimateHistogramTokens,
+  getTextFieldName,
   getTextValue,
-  LANGUAGES,
   resolveTextRules,
   setTextValue,
 } from "./text.ts";
@@ -164,8 +164,7 @@ function fitProbeFamily(
           )
         : 0;
     return {
-      field:
-        `text.${LANGUAGES.includes(field as (typeof LANGUAGES)[number]) ? `languageCharsPerToken.${field}` : field}` as TextRuleCalibrationReport["field"],
+      field: getTextFieldName(field),
       initial: originals[n]!,
       final: best[n]!,
       identifiable,
@@ -277,6 +276,8 @@ function isRuleIsolated(rule: Rule, field: TextField): boolean {
       return field === "lowercaseWordMaxLength" && rule.lowercase;
     case "digits":
       return field === "digitsPerToken";
+    case "underscore":
+      return field === "innerUnderscoreTokens";
     case "punctuation":
       return field === "punctuationCharsPerToken";
     case "language":

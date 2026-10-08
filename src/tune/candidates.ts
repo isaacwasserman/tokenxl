@@ -1,5 +1,5 @@
 import type { ResolvedText, Rule, TextField, TextHistogram } from "./text.ts";
-import { getTextValue } from "./text.ts";
+import { getTextValue, SCALE_FIELDS } from "./text.ts";
 
 // A byte-level tokenizer emits at most one token per UTF-8 byte, so a ratio
 // is at least 1 / bytes per character: 1 for ASCII and mostly-ASCII accented
@@ -20,6 +20,14 @@ export function listCandidateValues(
   text: ResolvedText,
   original: number,
 ): number[] {
+  // A scale changes estimates continuously; search it in steps of 0.01.
+  if ((SCALE_FIELDS as readonly TextField[]).includes(field))
+    return [
+      ...Array.from({ length: 251 }, (_, n) => 0.5 + n / 100),
+      original,
+      getTextValue(text, field),
+    ];
+  if (field === "innerUnderscoreTokens") return [0, 0.5, 1, 1.5, 2, original];
   if (field === "shortTokenThreshold" || field === "lowercaseWordMaxLength")
     return [
       ...Array.from(
@@ -84,6 +92,8 @@ function getChangingTerm(
         : [0, 0];
     case "digits":
       return field === "digitsPerToken" ? [rule.length, 0] : [0, 0];
+    case "underscore":
+      return [0, 0];
     case "language":
       return field === rule.language ? [rule.length, 0] : [0, 0];
     case "cjk":

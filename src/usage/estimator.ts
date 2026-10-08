@@ -148,6 +148,7 @@ function createContext(compiled: CompiledProfile): WalkContext {
     tally,
     weights: compiled.weights,
     text: compiled.text,
+    images: compiled.images,
     ...(compiled.textCache ? { textCache: compiled.textCache } : {}),
   };
 }

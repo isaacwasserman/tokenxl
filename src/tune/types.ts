@@ -205,6 +205,17 @@ export interface ReasoningReport {
   perReasoningPayloadChar: number;
   reasoningPayloadEnvelopeChars: number;
   countReasoningInPreviousTurns: boolean;
+  /**
+   * Stored OpenAI items: the generated OpenAI reasoning items, those with
+   * summary text, and the costs fitted from them. Without items, the costs
+   * keep their initial values.
+   */
+  storedReasoning: {
+    items: number;
+    summarized: number;
+    perStoredReasoning: number;
+    storedReasoningSummaryScale: number;
+  };
   /** Errors on the generated histories, before and after the fit. */
   metrics: ReasoningMetrics;
 }

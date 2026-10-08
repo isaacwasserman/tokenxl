@@ -40,14 +40,19 @@ export async function refineTextRules(
     ? measureErrors(selection, calibrated)
     : null;
   const fallback = { ...calibrated, text: initialText };
-  let current = calibrated;
+  // Probes of isolated segments miss the merges that an efficient tokenizer
+  // makes in natural text. When the initial rules fit the natural text
+  // better, as for tokenizers close to o200k, the refinement starts there.
+  const start =
+    measureErrors(train, fallback).loss < before.loss ? fallback : calibrated;
+  let current = start;
   let best = calibrated;
   let bestLoss = beforeSelection?.loss ?? before.loss;
   let selected: TextCompositionReport["selected"] = 0;
   const rounds = 4;
   for (let round = 1; round <= rounds; round++) {
     options.signal?.throwIfAborted();
-    current = fitTextRules(train, current, calibrated, options);
+    current = fitTextRules(train, current, start, options);
     const loss = measureErrors(judged, current).loss;
     if (loss < bestLoss - 1e-12) {
       best = current;

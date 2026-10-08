@@ -120,6 +120,50 @@ describe("profile fields", () => {
       expect(countFeature(input, field as ProfileField), field).toBe(count);
   });
 
+  it("counts unions, annotation keywords and open additionalProperties", () => {
+    const tools = {
+      a: tool({
+        inputSchema: jsonSchema({
+          type: "object",
+          additionalProperties: { type: "string" },
+          properties: {
+            id: { type: ["string", "number", "null"] },
+            name: { type: "string", nullable: true },
+            kind: { anyOf: [{ type: "string" }, { type: "number" }] },
+            when: { type: "string", format: "date", title: "When" },
+            limit: { type: "integer", minimum: 1, maximum: 50, default: 10 },
+            extra: { type: "object", additionalProperties: true },
+          },
+        }),
+      }),
+    };
+    const input: UsageInput = { messages: [], tools };
+    for (const [field, count] of Object.entries({
+      perUnionMember: 3,
+      perUnionBranch: 1,
+      perSchemaKeyword: 2,
+      perAdditionalSchemaKeyword: 3,
+      perAdditionalProperties: 2,
+      perAdditionalPropertiesTrue: 2,
+    }))
+      expect(countFeature(input, field as ProfileField), field).toBe(count);
+  });
+
+  it("adds perParallelToolCalls once for each message with two or more tool calls", () => {
+    const call = (toolCallId: string) => ({
+      type: "tool-call" as const,
+      toolCallId,
+      toolName: "a",
+      input: {},
+    });
+    const messages: ModelMessage[] = [
+      { role: "assistant", content: [call("1"), call("2"), call("3")] },
+      { role: "assistant", content: [call("4")] },
+      { role: "assistant", content: [call("5"), call("6")] },
+    ];
+    expect(countFeature({ messages }, "perParallelToolCalls")).toBe(2);
+  });
+
   it("charges keywords at repeated reference use sites and includes const only in the fixed enum cost", () => {
     const tools = {
       a: tool({

@@ -2,6 +2,7 @@ import type { ModelMessage } from "ai";
 import { Feature } from "../profile.ts";
 import type { WalkContext } from "./context.ts";
 import { addJson, addText, tallyValue } from "./context.ts";
+import { countImagePatches, readImageSize } from "./images.ts";
 import type { MessageBreakdown } from "./types.ts";
 
 // The part shapes differ between AI SDK versions, so the walker reads parts
@@ -32,6 +33,19 @@ export function walkMessage(
   for (const { part, payload } of payloads) {
     if (!part) addReasoningPayload(context, payload);
   }
+  // A stored item is charged once, by its summaries when any part has text.
+  context.summarizedItems = undefined;
+  if (Array.isArray(content))
+    for (const part of content as LoosePart[]) {
+      const key =
+        part.type === "reasoning" && !carriesReasoningPayload(part)
+          ? getStoredItemKey(part)
+          : undefined;
+      if (key && typeof part.text === "string" && part.text) {
+        context.summarizedItems ??= new Set();
+        context.summarizedItems.add(key);
+      }
+    }
 
   if (breakdown) breakdown.overhead = tallyValue(context) - start;
 
@@ -47,6 +61,10 @@ export function walkMessage(
       addText(context, content);
     }
   } else if (Array.isArray(content)) {
+    let calls = 0;
+    for (const part of content as LoosePart[])
+      if (part.type === "tool-call") calls++;
+    if (calls > 1) tally[Feature.perParallelToolCalls]!++;
     for (const part of content as LoosePart[]) {
       const partStart = breakdown ? tallyValue(context) : 0;
       walkPart(part, context);
@@ -90,17 +108,30 @@ function walkPart(part: LoosePart, context: WalkContext): void {
     case "reasoning": {
       // Its payload, charged by the message walk, replaces the summary text.
       if (carriesReasoningPayload(part)) break;
-      // A stored OpenAI item, sent as a reference: the AI SDK splits it into
-      // a part per summary. Charge the item once and each summary's text.
-      const item = (
-        part.providerOptions as { openai?: { itemId?: unknown } } | undefined
-      )?.openai?.itemId;
-      const key = typeof item === "string" && item ? `openai-item:${item}` : "";
-      context.sentReasoning ??= new Set();
-      if (!key || !context.sentReasoning.has(key))
+      const key = getStoredItemKey(part);
+      if (!key) {
         tally[Feature.perReasoning]!++;
-      if (key) context.sentReasoning.add(key);
-      addText(context, part.text as string);
+        addText(context, part.text as string);
+        break;
+      }
+      // A stored OpenAI item, sent as a reference: the AI SDK splits it into
+      // a part per summary. The hidden reasoning is estimated from the
+      // summaries, or is the mean of an item without summary text.
+      context.sentReasoning ??= new Set();
+      if (!context.sentReasoning.has(key) && !context.summarizedItems?.has(key))
+        tally[
+          context.priorTurn
+            ? Feature.previousStoredReasoning
+            : Feature.storedReasoning
+        ]!++;
+      context.sentReasoning.add(key);
+      addText(
+        context,
+        part.text as string,
+        context.priorTurn
+          ? Feature.previousStoredReasoningSummaryTokens
+          : Feature.storedReasoningSummaryTokens,
+      );
       break;
     }
 
@@ -119,19 +150,26 @@ function walkPart(part: LoosePart, context: WalkContext): void {
       break;
 
     case "image":
-      tally[Feature.perImage]!++;
+      addImage(context, part.image);
       break;
 
     case "file":
     case "reasoning-file":
-      tally[
-        isImageMediaType(part.mediaType) ? Feature.perImage : Feature.perFile
-      ]!++;
+      if (isImageMediaType(part.mediaType)) addImage(context, part.data);
+      else tally[Feature.perFile]!++;
       walkFileData(part.data, context);
       break;
 
     // Unknown parts (`custom`, tool approvals) count zero tokens.
   }
+}
+
+/** The key of a stored OpenAI reasoning item: a reasoning part with an item ID. */
+function getStoredItemKey(part: LoosePart): string | undefined {
+  const item = (
+    part.providerOptions as { openai?: { itemId?: unknown } } | undefined
+  )?.openai?.itemId;
+  return typeof item === "string" && item ? `openai-item:${item}` : undefined;
 }
 
 interface ProviderOptionsShape {
@@ -242,6 +280,21 @@ export function extractReasoningPayloads(
   return payloads;
 }
 
+/** Counts an image and its patches; `data` is its bytes, base64 data or URL. */
+function addImage(
+  context: WalkContext,
+  data: unknown,
+  inToolResult = false,
+): void {
+  const { tally } = context;
+  tally[Feature.perImage]!++;
+  if (inToolResult) tally[Feature.perToolResultImage]!++;
+  tally[Feature.perImagePatch]! += countImagePatches(
+    readImageSize(data),
+    context.images,
+  );
+}
+
 function walkFileData(data: unknown, context: WalkContext): void {
   // Inline text is sent as text. Binary data and URLs are not read.
   if (isLoosePart(data) && data.type === "text")
@@ -290,16 +343,15 @@ function walkToolOutputContent(item: unknown, context: WalkContext): void {
   if (type === "text") {
     addText(context, item.text as string);
   } else if (type.startsWith("image")) {
-    tally[Feature.perImage]!++;
+    // `image-data` carries base64 data; URLs and file IDs have no size.
+    addImage(context, item.data, true);
   } else if (type === "media") {
     // AI SDK 5 uses one media type for images and files.
-    tally[
-      isImageMediaType(item.mediaType) ? Feature.perImage : Feature.perFile
-    ]!++;
+    if (isImageMediaType(item.mediaType)) addImage(context, item.data, true);
+    else tally[Feature.perFile]!++;
   } else if (type.startsWith("file")) {
-    tally[
-      isImageMediaType(item.mediaType) ? Feature.perImage : Feature.perFile
-    ]!++;
+    if (isImageMediaType(item.mediaType)) addImage(context, item.data, true);
+    else tally[Feature.perFile]!++;
     walkFileData(item.data, context);
   }
 }

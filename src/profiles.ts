@@ -20,6 +20,7 @@ export const MODEL_PROFILES: {
 for (const profile of Object.values(entries)) {
   if (profile.text) {
     Object.freeze(profile.text.languageCharsPerToken);
+    Object.freeze(profile.text.unaccentedWordScale);
     Object.freeze(profile.text);
   }
   Object.freeze(profile);

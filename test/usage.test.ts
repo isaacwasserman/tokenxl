@@ -723,7 +723,7 @@ it("charges each OpenAI reasoning item once by its payload, without summary text
     0,
     estimateTokenCount("The answer."),
   ]);
-  // Stored items have no payload: one perReasoning per item, plus each summary.
+  // Stored items have no payload: their summaries, scaled, estimate them.
   const stored: UsageInput = {
     messages: [
       {
@@ -743,7 +743,44 @@ it("charges each OpenAI reasoning item once by its payload, without summary text
       },
     ],
   };
-  expect(createUsageEstimator(profile).count(stored)).toBe(
-    40 + estimateTokenCount("First idea.") + estimateTokenCount("Second idea."),
+  const storedProfile = {
+    ...profile,
+    perStoredReasoning: 100,
+    storedReasoningSummaryScale: 3,
+  };
+  expect(createUsageEstimator(storedProfile).count(stored)).toBe(
+    3 *
+      (estimateTokenCount("First idea.") + estimateTokenCount("Second idea.")),
   );
+});
+
+it("charges a stored OpenAI reasoning item without summary text its mean cost, once", () => {
+  const profile = {
+    baseOverhead: 0,
+    perMessage: 0,
+    perStoredReasoning: 100,
+    storedReasoningSummaryScale: 3,
+    countReasoningInPreviousTurns: false,
+  };
+  const empty = {
+    type: "reasoning" as const,
+    text: "",
+    providerOptions: { openai: { itemId: "rs_3" } },
+  };
+  const turn = (role: "user" | "assistant"): UsageInput["messages"][number] =>
+    role === "user"
+      ? { role, content: "a" }
+      : { role, content: [empty, { ...empty }] };
+  const a = estimateTokenCount("a");
+  expect(
+    createUsageEstimator(profile).count({
+      messages: [turn("user"), turn("assistant")],
+    }),
+  ).toBe(a + 100);
+  // Before the last user message, a model that drops earlier reasoning charges nothing.
+  expect(
+    createUsageEstimator(profile).count({
+      messages: [turn("user"), turn("assistant"), turn("user")],
+    }),
+  ).toBe(2 * a);
 });

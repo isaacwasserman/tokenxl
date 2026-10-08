@@ -370,3 +370,31 @@ describe("splitByTokens", () => {
     expect(oversizedOverlapChunks).toEqual(clampedOverlapChunks);
   });
 });
+
+describe("unaccentedWordScale", () => {
+  const german =
+    "Als Gregor Samsa eines Morgens aus unruhigen Träumen erwachte fand er sich in seinem Bett zu einem ungeheueren Ungeziefer verwandelt";
+  const english =
+    "As Gregor Samsa awoke one morning from uneasy dreams he found himself transformed in his bed into a gigantic insect.";
+
+  it("scales the unaccented words of a text that the accent rule identifies", () => {
+    // Without punctuation, every token but the accented word's is a scaled word.
+    const scaled = { unaccentedWordScale: { german: 2 } };
+    const accented = estimateTokenCount("Träumen");
+    const plain = estimateTokenCount(german) - accented;
+    expect(estimateTokenCount(german, scaled)).toBe(2 * plain + accented);
+    // A text without accented words keeps its estimate.
+    expect(estimateTokenCount(english, scaled)).toBe(
+      estimateTokenCount(english),
+    );
+  });
+
+  it("applies the scale in proportion below 5% accented words", () => {
+    // One accented word among 40 words: 2.5%, so half of the scale applies.
+    const text = `${Array(39).fill("Haus").join(" ")} Träume`;
+    const plain = estimateTokenCount(text) - estimateTokenCount("Träume");
+    expect(
+      estimateTokenCount(text, { unaccentedWordScale: { german: 3 } }),
+    ).toBe(Math.round(2 * plain) + estimateTokenCount("Träume"));
+  });
+});

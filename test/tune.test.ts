@@ -91,10 +91,12 @@ describe("tuneProfile", () => {
     for (const example of [
       {
         text: { digitsPerToken: 2.013 },
+        initial: { digitsPerToken: 2 },
         inputs: [47, 311, 1050].map((n) => "1".repeat(n)),
       },
       {
         text: { hanziCharsPerToken: 1.381 },
+        initial: { hanziCharsPerToken: 1.4 },
         inputs: [47, 97, 211].map(
           (n) =>
             "界".repeat(n) +
@@ -112,8 +114,11 @@ describe("tuneProfile", () => {
       }));
       const probes = createProbes();
       probes.textRules = [];
+      // The refinement stays near its start unless the text supports a
+      // move, so the search starts near the target interval.
       const { profile: fitted } = await tune({
         probes,
+        initial: { text: example.initial },
         textSamples: inputs,
         countTokens: (input) => target.count(input),
       });
@@ -193,7 +198,11 @@ describe("tuneProfile", () => {
       perArrayOfObjects: 5,
       perToolCall: 7,
       perToolResult: 5,
+      perParallelToolCalls: 9,
       perImage: 125,
+      perImagePatch: 2,
+      perToolResultImage: 10,
+      imagePatchSize: 32,
       perFile: 170,
       perReasoning: 4,
       perEnumValue: 3,
@@ -235,9 +244,11 @@ describe("tuneProfile", () => {
     expect(
       result.report.text.rules.every(
         (field) =>
-          field.identifiable || /german|romance|slavicLatin/.test(field.field),
+          field.identifiable ||
+          field.field.startsWith("text.unaccentedWordScale."),
       ),
     ).toBe(true);
+    expect(result.profile.imagePatchSize).toBe(32);
     expect(result.report.overhead.after.loss).toBe(0);
     const restored = createUsageEstimator(
       JSON.parse(JSON.stringify(result.profile)),
@@ -342,9 +353,9 @@ describe("tuneProfile", () => {
     }
     for (const field of result.report.text.rules) {
       expect(field.afterRmse, field.field).toBeCloseTo(0, 8);
-      // Accent rules have no isolated-word probes; running text fits them.
+      // Scales of unaccented words have no probes; running text fits them.
       expect(field.identifiable, field.field).toBe(
-        !/german|romance|slavicLatin/.test(field.field),
+        !field.field.startsWith("text.unaccentedWordScale."),
       );
     }
     expect(
