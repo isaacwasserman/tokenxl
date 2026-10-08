@@ -3,5 +3,5 @@ set -e
 
 # Auto-fix lint/format issues before committing, then re-stage the fixes.
 # If biome reports errors it can't fix, this exits non-zero and blocks the commit.
-pnpm run lint:fix
+pnpm exec biome check --write --diagnostic-level=error .
 git add -u packages
